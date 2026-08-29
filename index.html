@@ -152,8 +152,7 @@ footer{margin-top:48px;color:var(--muted);font-size:11.5px;text-align:center}
     'Match Encontrado': { short: 'Match', varName: '--good', bgVar: '--good-bg' },
     'Fuera de Rango de Fecha': { short: 'Fuera de Rango', varName: '--warn', bgVar: '--warn-bg' },
     'No Aplica Cruce (regla)': { short: 'No Aplica', varName: '--neutral', bgVar: '--neutral-bg' },
-    'Sin Match': { short: 'Sin Match', varName: '--bad', bgVar: '--bad-bg' },
-    'Confirmado por Equipo': { short: 'Confirmado por equipo', varName: '--good', bgVar: '--good-bg' }
+    'Sin Match': { short: 'Sin Match', varName: '--bad', bgVar: '--bad-bg' }
   };
 
   var state = { sede: 'ALL', statusFilter: 'ALL', search: '', grupo: 'ALL', ejecutiva: 'ALL' };
@@ -199,23 +198,25 @@ footer{margin-top:48px;color:var(--muted);font-size:11.5px;text-align:center}
     return 'var(--bad)';
   }
   function cargoCount(s) {
-    return (s['Match Encontrado'] || 0) + (s['Fuera de Rango de Fecha'] || 0) + (s['No Aplica Cruce (regla)'] || 0) + (s['Confirmado por Equipo'] || 0);
+    return (s['Match Encontrado'] || 0) + (s['Fuera de Rango de Fecha'] || 0) + (s['No Aplica Cruce (regla)'] || 0);
   }
 
   // Un comentario puede marcar una cita 'Sin Match' o 'Fuera de Rango' como confirmada
-  // con cargo por el equipo -- en ese caso, para efectos de estadísticas, se reclasifica
-  // a 'Confirmado por Equipo' (que SÍ cuenta dentro del % de cargo). El estatus original
-  // de la auditoría no se pierde: sigue visible en la tabla de detalle.
+  // con cargo por el equipo -- en ese caso, para estadísticas (KPI, barras por grupo)
+  // pasa a contar directamente como 'Match Encontrado'. El estatus original de la
+  // auditoría no se pierde: sigue visible en la tabla de detalle junto con el chip
+  // "✓ Confirmado", y el registro sigue en "Casos a revisar" para que el equipo pueda
+  // editar o quitar la confirmación.
   function effectiveStatus(row) {
     var note = COMMENTS[row.id];
     if (note && note.cargado && (row.estatus === 'Sin Match' || row.estatus === 'Fuera de Rango de Fecha')) {
-      return 'Confirmado por Equipo';
+      return 'Match Encontrado';
     }
     return row.estatus;
   }
 
   function computeStats(records) {
-    var s = { total: records.length, 'Match Encontrado': 0, 'Fuera de Rango de Fecha': 0, 'No Aplica Cruce (regla)': 0, 'Sin Match': 0, 'Confirmado por Equipo': 0 };
+    var s = { total: records.length, 'Match Encontrado': 0, 'Fuera de Rango de Fecha': 0, 'No Aplica Cruce (regla)': 0, 'Sin Match': 0 };
     for (var i = 0; i < records.length; i++) {
       var e = effectiveStatus(records[i]);
       if (s[e] === undefined) s[e] = 0;
@@ -244,7 +245,7 @@ footer{margin-top:48px;color:var(--muted);font-size:11.5px;text-align:center}
     var byGrupo = {};
     for (var i = 0; i < records.length; i++) {
       var r = records[i];
-      if (!byGrupo[r.grupo]) byGrupo[r.grupo] = { grupo: r.grupo, total: 0, 'Match Encontrado': 0, 'Fuera de Rango de Fecha': 0, 'No Aplica Cruce (regla)': 0, 'Sin Match': 0, 'Confirmado por Equipo': 0 };
+      if (!byGrupo[r.grupo]) byGrupo[r.grupo] = { grupo: r.grupo, total: 0, 'Match Encontrado': 0, 'Fuera de Rango de Fecha': 0, 'No Aplica Cruce (regla)': 0, 'Sin Match': 0 };
       byGrupo[r.grupo].total++;
       var e = effectiveStatus(r);
       byGrupo[r.grupo][e] = (byGrupo[r.grupo][e] || 0) + 1;
@@ -304,7 +305,6 @@ footer{margin-top:48px;color:var(--muted);font-size:11.5px;text-align:center}
 
     html += '<div class="stat-grid">';
     var order = ['Match Encontrado', 'Sin Match', 'Fuera de Rango de Fecha', 'No Aplica Cruce (regla)'];
-    if (stats['Confirmado por Equipo']) order.push('Confirmado por Equipo');
     order.forEach(function (key) {
       var meta = STATUS_META[key];
       var n = stats[key] || 0;
