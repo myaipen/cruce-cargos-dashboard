@@ -583,7 +583,7 @@ footer{margin-top:48px;color:var(--muted);font-size:11.5px;text-align:center}
 
   function loadData() {
     var loadEl = document.getElementById('fi-load-status');
-    if (loadEl) loadEl.textContent = 'Cargando datos en vivo desde tu Google Sheet…';
+    if (loadEl) loadEl.textContent = 'Cargando datos en vivo desde tu Google Sheet… (puede tardar 20-40 segundos, lee y cruza miles de filas cada vez — no recargues la página)';
     fetch(WEBAPP_URL)
       .then(function (r) { return r.json(); })
       .then(function (resp) {
