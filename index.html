@@ -143,6 +143,13 @@ window.__FI_COMMENTS__ = null;
   // sede/mes/ejecutiva: es un análisis independiente de esos filtros.
   var ALERTAS_CANTIDAD = [];
 
+  // Resumen agregado por grupo de esa misma verificación (buildAlertasCantidad
+  // también lo calcula): total de citas vs. total de cargos encontrados por grupo,
+  // sumando TODAS las combinaciones paciente+concepto (no solo las que tienen
+  // faltante). Un balance positivo (más cargos que citas) es normal -- paquetes o
+  // cargos adicionales por visita -- y no es un problema; uno negativo sí lo es.
+  var RESUMEN_CANTIDAD_GRUPO = [];
+
   var SEDES = [
     { key: 'ALL', label: 'Todas las sedes' },
     { key: 'CDMX', label: 'Ciudad de México' },
@@ -538,11 +545,40 @@ window.__FI_COMMENTS__ = null;
     return rows;
   }
 
+  // Tabla resumen: por grupo, total de citas vs. total de cargos encontrados (suma
+  // de TODAS las combinaciones paciente+concepto, no solo las que tienen faltante).
+  // "Balance" positivo = más cargos que citas (normal: paquetes, cargos adicionales
+  // por visita) &mdash; no es un problema. Balance negativo = el grupo, en conjunto,
+  // tiene menos cargos que citas completadas: ahí sí conviene revisar.
+  function resumenCantidadGrupoHtml() {
+    if (!RESUMEN_CANTIDAD_GRUPO.length) return '';
+    var html = '<div class="table-wrap" style="margin-bottom:18px"><table><thead><tr>' +
+      '<th>Grupo</th><th>Citas</th><th>Cargos encontrados</th><th>Balance</th><th>Combinaciones con faltante</th>' +
+      '</tr></thead><tbody>';
+    RESUMEN_CANTIDAD_GRUPO.forEach(function (g) {
+      var balance = g.cargos - g.citas;
+      var balanceClass = balance < 0 ? 'sin' : 'confirm';
+      var balanceTxt = (balance > 0 ? '+' : '') + fmtInt(balance);
+      html += '<tr>';
+      html += '<td>' + escapeHtml(g.grupo) + '</td>';
+      html += '<td>' + fmtInt(g.citas) + '</td>';
+      html += '<td>' + fmtInt(g.cargos) + '</td>';
+      html += '<td><span class="chip ' + balanceClass + '">' + balanceTxt + '</span></td>';
+      html += '<td>' + fmtInt(g.combinacionesConFaltante) + ' de ' + fmtInt(g.combinaciones) + '</td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table></div>';
+    return html;
+  }
+
   function renderAlertasCantidad(root) {
     var rows = alertasCantidadFiltradas();
     var totalFaltantes = ALERTAS_CANTIDAD.reduce(function (acc, r) { return acc + r.faltantes; }, 0);
 
-    var html = '<div class="note" style="margin-bottom:14px">Compara, por paciente y concepto, cuántas citas ya completadas hay contra cuántos cargos existen para ese mismo paciente en esa familia de conceptos &mdash; sin límite de la ventana de fecha de la regla (solo se ignoran cargos de más de 24 meses atrás). No cambia ningún estatus: es una señal para revisar a mano casos donde el cargo pudo hacerse fuera de mes o de la ventana normal. ' +
+    var html = '<div class="note" style="margin-bottom:14px">Por grupo, total de citas terminadas contra total de cargos encontrados (suma de todas las combinaciones paciente+concepto). Un balance positivo (más cargos que citas) es normal — paquetes o cargos adicionales por visita — y no es un problema; uno negativo sí lo es.</div>';
+    html += resumenCantidadGrupoHtml();
+
+    html += '<div class="note" style="margin-bottom:14px">Abajo, el detalle por paciente y concepto de las combinaciones con menos cargos que citas completadas &mdash; sin límite de la ventana de fecha de la regla (solo se ignoran cargos de más de 24 meses atrás). No cambia ningún estatus: es una señal para revisar a mano casos donde el cargo pudo hacerse fuera de mes o de la ventana normal. ' +
       fmtInt(ALERTAS_CANTIDAD.length) + ' combinaciones paciente + concepto con menos cargos que citas &middot; ' + fmtInt(totalFaltantes) + ' cargos aparentemente faltantes en total.</div>';
 
     html += '<div class="toolbar">';
@@ -881,6 +917,7 @@ window.__FI_COMMENTS__ = null;
         DATA = resp.registros || [];
         DESCUENTOS = resp.descuentoRegistros || [];
         ALERTAS_CANTIDAD = resp.alertasCantidad || [];
+        RESUMEN_CANTIDAD_GRUPO = resp.resumenCantidadGrupo || [];
         COMMENTS = {};
         Object.keys(resp.comentarios || {}).forEach(function (id) {
           var c = resp.comentarios[id];
