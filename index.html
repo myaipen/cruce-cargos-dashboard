@@ -95,6 +95,14 @@ tr.row-confirmed:hover td{background:var(--good-bg)}
 .comment-input:focus{outline:2px solid var(--accent);outline-offset:1px}
 .comment-input:disabled{opacity:.65;cursor:not-allowed}
 .save-state{font-size:10.5px;color:var(--muted);margin-top:3px;min-height:12px}
+.descuento-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media (max-width:820px){.descuento-grid{grid-template-columns:1fr}}
+.descuento-card-title{font-size:14px;font-weight:600;padding:16px 18px 2px}
+.descuento-table{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:8px}
+.descuento-table th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:600;padding:8px 18px;border-bottom:1px solid var(--line);white-space:nowrap}
+.descuento-table td{padding:9px 18px;border-bottom:1px solid var(--line)}
+.descuento-table tr:last-child td{border-bottom:none;padding-bottom:16px}
+.descuento-table td.money{font-family:'IBM Plex Mono',ui-monospace,monospace;font-variant-numeric:tabular-nums;white-space:nowrap}
 .empty{padding:40px;text-align:center;color:var(--muted);font-size:13.5px}
 footer{margin-top:48px;color:var(--muted);font-size:11.5px;text-align:center}
 </style>
@@ -102,6 +110,10 @@ footer{margin-top:48px;color:var(--muted);font-size:11.5px;text-align:center}
 
 <div id="root"></div>
 
+<script>
+window.__FI_DATA__ = __DATA_JSON__;
+window.__FI_COMMENTS__ = __COMMENTS_JSON__;
+</script>
 <script id="fi-app-src">
 (function () {
   'use strict';
@@ -115,6 +127,12 @@ footer{margin-top:48px;color:var(--muted);font-size:11.5px;text-align:center}
   var DATA = [];
   var COMMENTS = {};
   var CORTE_LABEL = 'Cargando…';
+
+  // Filas de CARGOS con % Dto. > 0 -- viene directo del motor (buildDescuentoRecords),
+  // independiente de DATA (esa es agenda cruzada contra cargos; esto es CARGOS puro).
+  // r.fecha aquí es la fecha del cargo (F. Cargo), no de una cita, pero es compatible
+  // con byMes() para que la sección respete el mismo filtro de mes que el resto.
+  var DESCUENTOS = [];
 
   var SEDES = [
     { key: 'ALL', label: 'Todas las sedes' },
@@ -169,6 +187,10 @@ footer{margin-top:48px;color:var(--muted);font-size:11.5px;text-align:center}
   function getMeses() {
     var present = {};
     DATA.forEach(function (r) { if (r.fecha) present[r.fecha.slice(0, 7)] = true; });
+    // Incluye también los meses de DESCUENTOS (fecha de cargo, no de cita) --
+    // así el filtro nunca esconde un mes con descuentos aunque no tenga citas
+    // en la agenda dentro del alcance actual.
+    DESCUENTOS.forEach(function (r) { if (r.fecha) present[r.fecha.slice(0, 7)] = true; });
     return Object.keys(present).sort();
   }
   var apiReady = false;
@@ -196,6 +218,9 @@ footer{margin-top:48px;color:var(--muted);font-size:11.5px;text-align:center}
   // ---------- helpers ----------
   function fmtInt(n) { return (n || 0).toLocaleString('es-MX'); }
   function pct1(n) { return (isFinite(n) ? n : 0).toFixed(1) + '%'; }
+  function fmtMoney(n) {
+    return (isFinite(n) ? n : 0).toLocaleString('es-MX', { style: 'currency', currency: 'MXN', maximumFractionDigits: 0 });
+  }
   function fmtDate(iso) {
     if (!iso) return '—';
     var p = iso.split('-');
@@ -259,6 +284,32 @@ footer{margin-top:48px;color:var(--muted);font-size:11.5px;text-align:center}
   // tanto para el KPI y las barras por grupo como para la tabla de detalle.
   function scopedRecords() {
     return byMes(byEjecutiva(bySede(DATA, state.sede), state.ejecutiva), state.mes);
+  }
+
+  // DESCUENTOS no tiene sede confiable (ver nota en Code.gs), así que solo respeta
+  // el filtro de mes -- no sede ni ejecutiva (esa es justo la dimensión que se rankea).
+  function scopedDescuentos() {
+    return byMes(DESCUENTOS, state.mes);
+  }
+
+  // Agrupa filas de descuento por una llave (ejecutiva o producto/concepto) y
+  // rankea por monto total descontado (de mayor a menor). keyFn regresa null para
+  // excluir una fila del ranking (p.ej. conceptos vacíos).
+  function aggregateDescuentos(records, keyFn, maxRows) {
+    var map = {};
+    var order = [];
+    records.forEach(function (r) {
+      var k = keyFn(r);
+      if (!k) return;
+      if (!map[k]) { map[k] = { key: k, montoTotal: 0, count: 0, sumPct: 0 }; order.push(k); }
+      map[k].montoTotal += (r.montoDto || 0);
+      map[k].count += 1;
+      map[k].sumPct += r.pctDto;
+    });
+    var arr = order.map(function (k) { return map[k]; });
+    arr.forEach(function (x) { x.pctProm = x.count ? x.sumPct / x.count : 0; });
+    arr.sort(function (a, b) { return b.montoTotal - a.montoTotal; });
+    return typeof maxRows === 'number' ? arr.slice(0, maxRows) : arr;
   }
 
   function groupStats(records) {
@@ -354,6 +405,46 @@ footer{margin-top:48px;color:var(--muted);font-size:11.5px;text-align:center}
       html += '<div class="bar-val">' + pct1(g.pct) + ' &middot; ' + fmtInt(g.total) + '</div>';
       html += '</div>';
     });
+    html += '</div>';
+    root.innerHTML = html;
+  }
+
+  // ---------- render: descuentos ----------
+  function descuentoTableHtml(title, rows, labelHeader) {
+    var html = '<div class="card">';
+    html += '<div class="descuento-card-title">' + escapeHtml(title) + '</div>';
+    if (!rows.length) {
+      html += '<div class="empty">Sin descuentos registrados en este alcance.</div>';
+    } else {
+      html += '<table class="descuento-table"><thead><tr>' +
+        '<th>' + escapeHtml(labelHeader) + '</th><th>Monto descontado</th><th>Cargos c/ dto.</th><th>% Dto. prom.</th>' +
+        '</tr></thead><tbody>';
+      rows.forEach(function (r) {
+        html += '<tr>';
+        html += '<td>' + escapeHtml(r.key) + '</td>';
+        html += '<td class="money">' + fmtMoney(r.montoTotal) + '</td>';
+        html += '<td>' + fmtInt(r.count) + '</td>';
+        html += '<td>' + pct1(r.pctProm) + '</td>';
+        html += '</tr>';
+      });
+      html += '</tbody></table>';
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function renderDescuentos(root) {
+    var scoped = scopedDescuentos();
+    var porEjecutiva = aggregateDescuentos(scoped, function (r) { return r.ejecutiva || 'Sin asignar'; }, 15);
+    var porProducto = aggregateDescuentos(scoped, function (r) { return r.concepto || null; }, 15);
+    var montoTotal = scoped.reduce(function (acc, r) { return acc + (r.montoDto || 0); }, 0);
+
+    var html = '<div class="note" style="margin-bottom:14px">' +
+      fmtInt(scoped.length) + ' cargos con descuento &middot; ' + fmtMoney(montoTotal) + ' descontado en total ' +
+      '(según fecha de cargo, mismo filtro de mes que arriba). "Cargos c/ dto." cuenta solo filas con % Dto. &gt; 0.</div>';
+    html += '<div class="descuento-grid">';
+    html += descuentoTableHtml('Ejecutivas con más descuento', porEjecutiva, 'Ejecutiva');
+    html += descuentoTableHtml('Productos con más descuento', porProducto, 'Producto / concepto');
     html += '</div>';
     root.innerHTML = html;
   }
@@ -472,6 +563,7 @@ footer{margin-top:48px;color:var(--muted);font-size:11.5px;text-align:center}
     renderMesFilter(document.getElementById('fi-mes-filter-wrap'));
     renderKPI(document.getElementById('fi-kpi'));
     renderGrupoBars(document.getElementById('fi-bars'));
+    renderDescuentos(document.getElementById('fi-descuentos'));
     renderStatusPills(document.getElementById('fi-status-pills'));
     renderTable(document.getElementById('fi-table'));
     wireTopEvents();
@@ -630,6 +722,7 @@ footer{margin-top:48px;color:var(--muted);font-size:11.5px;text-align:center}
       .then(function (resp) {
         if (!resp || !resp.ok) throw new Error((resp && resp.error) || 'Respuesta inválida del servidor');
         DATA = resp.registros || [];
+        DESCUENTOS = resp.descuentoRegistros || [];
         COMMENTS = {};
         Object.keys(resp.comentarios || {}).forEach(function (id) {
           var c = resp.comentarios[id];
@@ -671,6 +764,8 @@ footer{margin-top:48px;color:var(--muted);font-size:11.5px;text-align:center}
       '<div id="fi-kpi"></div></section>' +
       '<section><div class="section-head"><h2>Distribución por grupo</h2><div class="note">% ya resuelto de cada tipo de cita (mismo criterio de arriba), de mayor a menor. Un grupo con % bajo es el que más casos pendientes tiene por revisar.</div></div>' +
       '<div id="fi-bars"></div></section>' +
+      '<section><div class="section-head"><h2>Descuentos</h2><div class="note">Qué ejecutiva y qué producto concentran más descuento, según la columna "% Dto." de CARGOS. La ejecutiva se determina por el médico (Profesional / Profesional Historia del cargo) — CARGOS no trae sede confiable, así que este ranking solo se filtra por mes, no por sede.</div></div>' +
+      '<div id="fi-descuentos"></div></section>' +
       '<section><div class="section-head"><h2>Casos a revisar</h2><div class="note">Comenta si detectas que falta una regla, un concepto de cargo o una excepción — sirve como conocimiento para el equipo. Si confirmas "Ya tiene cargo", ese caso se suma al % de cargo de arriba.</div></div>' +
       '<div class="pillrow" id="fi-status-pills" style="margin-bottom:14px"></div>' +
       '<div id="fi-table"></div></section>' +
