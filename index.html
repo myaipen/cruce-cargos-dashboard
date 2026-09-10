@@ -459,7 +459,10 @@ window.__FI_COMMENTS__ = null;
     html += '</div>';
 
     html += '<div class="stat-grid">';
-    var order = ['Match Encontrado', 'Sin Match', 'Fuera de Rango de Fecha', 'No Aplica Cruce (regla)', 'Justificado (Sin Cargo)', 'Concepto No Definido en Reglas'];
+    // "Concepto No Definido en Reglas" (Sin Regla) no se muestra como tarjeta aquí --
+    // suele quedar en 0 o casi 0 y duplicaba info ya visible en "Casos a revisar" (el
+    // filtro "Solo Sin Regla"). Sigue contando en el % y en "pendientes" (ver abajo).
+    var order = ['Match Encontrado', 'Sin Match', 'Fuera de Rango de Fecha', 'No Aplica Cruce (regla)', 'Justificado (Sin Cargo)'];
     order.forEach(function (key) {
       var meta = STATUS_META[key];
       var n = stats[key] || 0;
