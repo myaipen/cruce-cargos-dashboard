@@ -95,8 +95,7 @@ tr.row-confirmed:hover td{background:var(--good-bg)}
 .comment-input:focus{outline:2px solid var(--accent);outline-offset:1px}
 .comment-input:disabled{opacity:.65;cursor:not-allowed}
 .save-state{font-size:10.5px;color:var(--muted);margin-top:3px;min-height:12px}
-.descuento-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-@media (max-width:820px){.descuento-grid{grid-template-columns:1fr}}
+.descuento-grid{display:flex;flex-direction:column;gap:16px}
 .descuento-card-title{font-size:14px;font-weight:600;padding:16px 18px 2px}
 .descuento-table{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:8px}
 .descuento-table th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:600;padding:8px 18px;border-bottom:1px solid var(--line);white-space:nowrap}
@@ -563,9 +562,9 @@ window.__FI_COMMENTS__ = __COMMENTS_JSON__;
     renderMesFilter(document.getElementById('fi-mes-filter-wrap'));
     renderKPI(document.getElementById('fi-kpi'));
     renderGrupoBars(document.getElementById('fi-bars'));
-    renderDescuentos(document.getElementById('fi-descuentos'));
     renderStatusPills(document.getElementById('fi-status-pills'));
     renderTable(document.getElementById('fi-table'));
+    renderDescuentos(document.getElementById('fi-descuentos'));
     wireTopEvents();
   }
 
@@ -764,11 +763,11 @@ window.__FI_COMMENTS__ = __COMMENTS_JSON__;
       '<div id="fi-kpi"></div></section>' +
       '<section><div class="section-head"><h2>Distribución por grupo</h2><div class="note">% ya resuelto de cada tipo de cita (mismo criterio de arriba), de mayor a menor. Un grupo con % bajo es el que más casos pendientes tiene por revisar.</div></div>' +
       '<div id="fi-bars"></div></section>' +
-      '<section><div class="section-head"><h2>Descuentos</h2><div class="note">Qué ejecutiva y qué producto concentran más descuento, según la columna "% Dto." de CARGOS. La ejecutiva se determina por el médico (Profesional / Profesional Historia del cargo) — CARGOS no trae sede confiable, así que este ranking solo se filtra por mes, no por sede.</div></div>' +
-      '<div id="fi-descuentos"></div></section>' +
       '<section><div class="section-head"><h2>Casos a revisar</h2><div class="note">Comenta si detectas que falta una regla, un concepto de cargo o una excepción — sirve como conocimiento para el equipo. Si confirmas "Ya tiene cargo", ese caso se suma al % de cargo de arriba.</div></div>' +
       '<div class="pillrow" id="fi-status-pills" style="margin-bottom:14px"></div>' +
       '<div id="fi-table"></div></section>' +
+      '<section><div class="section-head"><h2>Descuentos</h2><div class="note">Qué ejecutiva y qué producto concentran más descuento, según la columna "% Dto." de CARGOS. La ejecutiva se determina por el médico (Profesional / Profesional Historia del cargo) — CARGOS no trae sede confiable, así que este ranking solo se filtra por mes, no por sede.</div></div>' +
+      '<div id="fi-descuentos"></div></section>' +
       '<footer>Fertilidad Integral — Auditoría de cruce Agenda vs. Cargos</footer>' +
       '</div>';
     root.innerHTML = html;
