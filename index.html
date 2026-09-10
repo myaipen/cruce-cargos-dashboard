@@ -133,6 +133,13 @@ window.__FI_COMMENTS__ = __COMMENTS_JSON__;
   // con byMes() para que la sección respete el mismo filtro de mes que el resto.
   var DESCUENTOS = [];
 
+  // Verificación de cantidad por paciente (buildAlertasCantidad): paciente+concepto
+  // donde hay menos cargos que citas completadas, sin restricción de ventana de
+  // fecha de regla (solo una ventana amplia de 24 meses) -- señal de casos
+  // extraordinarios a revisar a mano, no un cambio de estatus. No se filtra por
+  // sede/mes/ejecutiva: es un análisis independiente de esos filtros.
+  var ALERTAS_CANTIDAD = [];
+
   var SEDES = [
     { key: 'ALL', label: 'Todas las sedes' },
     { key: 'CDMX', label: 'Ciudad de México' },
@@ -161,15 +168,15 @@ window.__FI_COMMENTS__ = __COMMENTS_JSON__;
   var STATUS_META = {
     'Match Encontrado': { short: 'Match', varName: '--good', bgVar: '--good-bg' },
     'Fuera de Rango de Fecha': { short: 'Fuera de Rango', varName: '--warn', bgVar: '--warn-bg' },
+    // Incluye tanto "no aplica por regla" como los duplicados GDL (2+ citas idénticas
+    // -- mismo paciente+fecha+concepto -- que generan un solo cargo real: todas menos
+    // la primera de cada grupo se reclasifican aquí en el motor, para que ese cargo
+    // real no se cuente varias veces en Match/Fuera de Rango).
     'No Aplica Cruce (regla)': { short: 'No Aplica', varName: '--neutral', bgVar: '--neutral-bg' },
-    'Sin Match': { short: 'Sin Match', varName: '--bad', bgVar: '--bad-bg' },
-    // GDL: 2+ citas idénticas (mismo paciente+fecha+concepto) que deberían generar
-    // un solo cargo -- todas menos la primera de cada grupo caen aquí, para que el
-    // mismo cargo real no se cuente varias veces en Match/Fuera de Rango.
-    'Cita Duplicada (GDL)': { short: 'Duplicado GDL', varName: '--neutral', bgVar: '--neutral-bg' }
+    'Sin Match': { short: 'Sin Match', varName: '--bad', bgVar: '--bad-bg' }
   };
 
-  var state = { sede: 'ALL', statusFilter: 'ALL', search: '', grupo: 'ALL', ejecutiva: 'ALL', mes: 'ALL' };
+  var state = { sede: 'ALL', statusFilter: 'ALL', search: '', grupo: 'ALL', ejecutiva: 'ALL', mes: 'ALL', searchCantidad: '' };
 
   var MESES_ES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
 
@@ -179,6 +186,10 @@ window.__FI_COMMENTS__ = __COMMENTS_JSON__;
     var nombre = MESES_ES[parseInt(p[1], 10) - 1];
     return nombre.charAt(0).toUpperCase() + nombre.slice(1) + ' ' + p[0];
   }
+
+  // El dashboard solo opera con el año en curso -- cualquier fecha de otro año
+  // (dato viejo, error de captura, etc.) no debe aparecer como opción de mes.
+  var ANIO_FILTRO_MESES = '2026';
 
   // Meses presentes en los datos (según fecha de la CITA), de más antiguo a más
   // reciente -- así cuando empiece septiembre, agosto queda disponible como mes
@@ -190,7 +201,7 @@ window.__FI_COMMENTS__ = __COMMENTS_JSON__;
     // así el filtro nunca esconde un mes con descuentos aunque no tenga citas
     // en la agenda dentro del alcance actual.
     DESCUENTOS.forEach(function (r) { if (r.fecha) present[r.fecha.slice(0, 7)] = true; });
-    return Object.keys(present).sort();
+    return Object.keys(present).filter(function (m) { return m.slice(0, 4) === ANIO_FILTRO_MESES; }).sort();
   }
   var apiReady = false;
   var saveTimers = {};
@@ -237,7 +248,7 @@ window.__FI_COMMENTS__ = __COMMENTS_JSON__;
     return 'var(--bad)';
   }
   function cargoCount(s) {
-    return (s['Match Encontrado'] || 0) + (s['Fuera de Rango de Fecha'] || 0) + (s['No Aplica Cruce (regla)'] || 0) + (s['Cita Duplicada (GDL)'] || 0);
+    return (s['Match Encontrado'] || 0) + (s['Fuera de Rango de Fecha'] || 0) + (s['No Aplica Cruce (regla)'] || 0);
   }
 
   // Un comentario puede marcar una cita 'Sin Match' o 'Fuera de Rango' como confirmada
@@ -255,7 +266,7 @@ window.__FI_COMMENTS__ = __COMMENTS_JSON__;
   }
 
   function computeStats(records) {
-    var s = { total: records.length, 'Match Encontrado': 0, 'Fuera de Rango de Fecha': 0, 'No Aplica Cruce (regla)': 0, 'Sin Match': 0, 'Cita Duplicada (GDL)': 0 };
+    var s = { total: records.length, 'Match Encontrado': 0, 'Fuera de Rango de Fecha': 0, 'No Aplica Cruce (regla)': 0, 'Sin Match': 0 };
     for (var i = 0; i < records.length; i++) {
       var e = effectiveStatus(records[i]);
       if (s[e] === undefined) s[e] = 0;
@@ -315,7 +326,7 @@ window.__FI_COMMENTS__ = __COMMENTS_JSON__;
     var byGrupo = {};
     for (var i = 0; i < records.length; i++) {
       var r = records[i];
-      if (!byGrupo[r.grupo]) byGrupo[r.grupo] = { grupo: r.grupo, total: 0, 'Match Encontrado': 0, 'Fuera de Rango de Fecha': 0, 'No Aplica Cruce (regla)': 0, 'Sin Match': 0, 'Cita Duplicada (GDL)': 0 };
+      if (!byGrupo[r.grupo]) byGrupo[r.grupo] = { grupo: r.grupo, total: 0, 'Match Encontrado': 0, 'Fuera de Rango de Fecha': 0, 'No Aplica Cruce (regla)': 0, 'Sin Match': 0 };
       byGrupo[r.grupo].total++;
       var e = effectiveStatus(r);
       byGrupo[r.grupo][e] = (byGrupo[r.grupo][e] || 0) + 1;
@@ -371,12 +382,11 @@ window.__FI_COMMENTS__ = __COMMENTS_JSON__;
     html += '<div class="card hero-card">';
     html += '<div class="hero-label">% de cargo ya resuelto &middot; ' + escapeHtml(scopeLabel) + '</div>';
     html += '<div class="hero-num" style="color:' + tierVar(pct) + '">' + pct1(pct) + '</div>';
-    html += '<div class="hero-sub">' + fmtInt(cargoCount(stats)) + ' de ' + fmtInt(stats.total) + ' citas ya con cargo, fuera de rango, no aplica, duplicada (GDL) o confirmadas por el equipo &mdash; quedan <strong>' + fmtInt(pendientes) + ' pendientes</strong> por revisar</div>';
+    html += '<div class="hero-sub">' + fmtInt(cargoCount(stats)) + ' de ' + fmtInt(stats.total) + ' citas ya con cargo, fuera de rango, no aplica (incluye duplicadas GDL) o confirmadas por el equipo &mdash; quedan <strong>' + fmtInt(pendientes) + ' pendientes</strong> por revisar</div>';
     html += '</div>';
 
     html += '<div class="stat-grid">';
     var order = ['Match Encontrado', 'Sin Match', 'Fuera de Rango de Fecha', 'No Aplica Cruce (regla)'];
-    if (stats['Cita Duplicada (GDL)']) order.push('Cita Duplicada (GDL)');
     order.forEach(function (key) {
       var meta = STATUS_META[key];
       var n = stats[key] || 0;
@@ -445,6 +455,55 @@ window.__FI_COMMENTS__ = __COMMENTS_JSON__;
     html += descuentoTableHtml('Ejecutivas con más descuento', porEjecutiva, 'Ejecutiva');
     html += descuentoTableHtml('Productos con más descuento', porProducto, 'Producto / concepto');
     html += '</div>';
+    root.innerHTML = html;
+  }
+
+  // ---------- render: verificación de cantidad por paciente ----------
+  function alertasCantidadFiltradas() {
+    var rows = ALERTAS_CANTIDAD;
+    if (state.searchCantidad.trim()) {
+      var q = state.searchCantidad.trim().toLowerCase();
+      rows = rows.filter(function (r) {
+        return (r.paciente || '').toLowerCase().indexOf(q) !== -1 ||
+          (r.concepto || '').toLowerCase().indexOf(q) !== -1 ||
+          (r.grupo || '').toLowerCase().indexOf(q) !== -1;
+      });
+    }
+    return rows;
+  }
+
+  function renderAlertasCantidad(root) {
+    var rows = alertasCantidadFiltradas();
+    var totalFaltantes = ALERTAS_CANTIDAD.reduce(function (acc, r) { return acc + r.faltantes; }, 0);
+
+    var html = '<div class="note" style="margin-bottom:14px">Compara, por paciente y concepto, cuántas citas ya completadas hay contra cuántos cargos existen para ese mismo paciente en esa familia de conceptos &mdash; sin límite de la ventana de fecha de la regla (solo se ignoran cargos de más de 24 meses atrás). No cambia ningún estatus: es una señal para revisar a mano casos donde el cargo pudo hacerse fuera de mes o de la ventana normal. ' +
+      fmtInt(ALERTAS_CANTIDAD.length) + ' combinaciones paciente + concepto con menos cargos que citas &middot; ' + fmtInt(totalFaltantes) + ' cargos aparentemente faltantes en total.</div>';
+
+    html += '<div class="toolbar">';
+    html += '<input class="search" id="fi-cantidad-search" type="text" placeholder="Buscar por paciente, concepto o grupo…" value="' + escapeHtml(state.searchCantidad) + '">';
+    html += '<span class="count-badge">' + fmtInt(rows.length) + ' registros</span>';
+    html += '</div>';
+
+    if (!rows.length) {
+      html += '<div class="table-wrap"><div class="empty">' + (ALERTAS_CANTIDAD.length ? 'Sin resultados para esta búsqueda.' : 'No se detectaron faltantes de cantidad.') + '</div></div>';
+      root.innerHTML = html;
+      return;
+    }
+
+    html += '<div class="table-wrap"><table><thead><tr>' +
+      '<th>Paciente</th><th>Grupo</th><th>Concepto</th><th>Citas</th><th>Cargos encontrados</th><th>Faltantes</th>' +
+      '</tr></thead><tbody>';
+    rows.forEach(function (r) {
+      html += '<tr>';
+      html += '<td>' + escapeHtml(r.paciente) + '</td>';
+      html += '<td>' + escapeHtml(r.grupo) + '</td>';
+      html += '<td>' + escapeHtml(r.concepto) + '</td>';
+      html += '<td>' + fmtInt(r.citasCount) + '</td>';
+      html += '<td>' + fmtInt(r.cargosCount) + '</td>';
+      html += '<td><span class="chip fuera">' + fmtInt(r.faltantes) + '</span></td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table></div>';
     root.innerHTML = html;
   }
 
@@ -565,7 +624,49 @@ window.__FI_COMMENTS__ = __COMMENTS_JSON__;
     renderStatusPills(document.getElementById('fi-status-pills'));
     renderTable(document.getElementById('fi-table'));
     renderDescuentos(document.getElementById('fi-descuentos'));
+    renderAlertasCantidad(document.getElementById('fi-cantidad'));
     wireTopEvents();
+  }
+
+  // renderTable() y renderAlertasCantidad() reemplazan su propio toolbar (con el
+  // input de búsqueda y el select de grupo) cada vez que se re-renderizan -- eso
+  // destruye el elemento DOM anterior y, con él, cualquier listener pegado
+  // directamente. Por eso estos dos "wire*" son funciones aparte que se pueden
+  // volver a invocar después de cada re-render parcial, no solo una vez al
+  // inicio: si no, la búsqueda deja de reaccionar después de la primera tecla.
+  function wireDetailToolbar() {
+    var searchEl = document.getElementById('fi-search');
+    if (searchEl) {
+      searchEl.addEventListener('input', function () {
+        state.search = searchEl.value;
+        renderTable(document.getElementById('fi-table'));
+        wireDetailToolbar();
+        // restore focus + caret since el toolbar se re-renderizó
+        var el = document.getElementById('fi-search');
+        if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+      });
+    }
+    var grupoSel = document.getElementById('fi-grupo-filter');
+    if (grupoSel) {
+      grupoSel.addEventListener('change', function () {
+        state.grupo = grupoSel.value;
+        renderTable(document.getElementById('fi-table'));
+        wireDetailToolbar();
+      });
+    }
+  }
+
+  function wireCantidadSearch() {
+    var cantidadSearchEl = document.getElementById('fi-cantidad-search');
+    if (cantidadSearchEl) {
+      cantidadSearchEl.addEventListener('input', function () {
+        state.searchCantidad = cantidadSearchEl.value;
+        renderAlertasCantidad(document.getElementById('fi-cantidad'));
+        wireCantidadSearch();
+        var el = document.getElementById('fi-cantidad-search');
+        if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+      });
+    }
   }
 
   function wireTopEvents() {
@@ -581,26 +682,11 @@ window.__FI_COMMENTS__ = __COMMENTS_JSON__;
       btn.addEventListener('click', function () {
         state.statusFilter = btn.getAttribute('data-status');
         renderTable(document.getElementById('fi-table'));
+        wireDetailToolbar();
         renderStatusPillsOnly();
       });
     });
-    var searchEl = document.getElementById('fi-search');
-    if (searchEl) {
-      searchEl.addEventListener('input', function () {
-        state.search = searchEl.value;
-        renderTable(document.getElementById('fi-table'));
-        // restore focus + caret since table re-renders
-        var el = document.getElementById('fi-search');
-        if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
-      });
-    }
-    var grupoSel = document.getElementById('fi-grupo-filter');
-    if (grupoSel) {
-      grupoSel.addEventListener('change', function () {
-        state.grupo = grupoSel.value;
-        renderTable(document.getElementById('fi-table'));
-      });
-    }
+    wireDetailToolbar();
     var ejecutivaSel = document.getElementById('fi-ejecutiva-filter');
     if (ejecutivaSel) {
       ejecutivaSel.addEventListener('change', function () {
@@ -615,6 +701,7 @@ window.__FI_COMMENTS__ = __COMMENTS_JSON__;
         render();
       });
     }
+    wireCantidadSearch();
   }
 
   function renderStatusPillsOnly() {
@@ -722,6 +809,7 @@ window.__FI_COMMENTS__ = __COMMENTS_JSON__;
         if (!resp || !resp.ok) throw new Error((resp && resp.error) || 'Respuesta inválida del servidor');
         DATA = resp.registros || [];
         DESCUENTOS = resp.descuentoRegistros || [];
+        ALERTAS_CANTIDAD = resp.alertasCantidad || [];
         COMMENTS = {};
         Object.keys(resp.comentarios || {}).forEach(function (id) {
           var c = resp.comentarios[id];
@@ -768,6 +856,8 @@ window.__FI_COMMENTS__ = __COMMENTS_JSON__;
       '<div id="fi-table"></div></section>' +
       '<section><div class="section-head"><h2>Descuentos</h2><div class="note">Qué ejecutiva y qué producto concentran más descuento, según la columna "% Dto." de CARGOS. La ejecutiva se determina por el médico (Profesional / Profesional Historia del cargo) — CARGOS no trae sede confiable, así que este ranking solo se filtra por mes, no por sede.</div></div>' +
       '<div id="fi-descuentos"></div></section>' +
+      '<section><div class="section-head"><h2>Verificación de cantidad por paciente</h2><div class="note">Segunda pasada, aparte de las reglas de fecha: por paciente + concepto, compara cuántas citas completadas hay contra cuántos cargos existen para ese paciente (ventana amplia de 24 meses, sin la restricción normal de la regla). Detecta casos extraordinarios donde el cargo se hizo fuera de mes o de la ventana habitual — no cambia ningún estatus, es para revisar a mano.</div></div>' +
+      '<div id="fi-cantidad"></div></section>' +
       '<footer>Fertilidad Integral — Auditoría de cruce Agenda vs. Cargos</footer>' +
       '</div>';
     root.innerHTML = html;
