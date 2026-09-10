@@ -181,7 +181,13 @@ window.__FI_COMMENTS__ = null;
     // necesidad de marcar la casilla "Ya tiene cargo" (que es para lo contrario: sí
     // hay cargo, solo falta vincularlo).
     'Justificado (Sin Cargo)': { short: 'Justificado', varName: '--neutral', bgVar: '--neutral-bg' },
-    'Sin Match': { short: 'Sin Match', varName: '--bad', bgVar: '--bad-bg' }
+    'Sin Match': { short: 'Sin Match', varName: '--bad', bgVar: '--bad-bg' },
+    // El motor marca así una cita cuyo concepto no tiene NINGUNA fila en Reglas (ni
+    // SI ni NO) -- no es que falte el cargo, es que todavía no le hemos dicho al
+    // sistema qué esperar de ese concepto. Antes esto quedaba fuera de todos los
+    // conteos (ni resuelto ni pendiente), lo que hacía que el % no cerrara contra el
+    // total mostrado. Ahora cuenta como pendiente y aparece en "Casos a revisar".
+    'Concepto No Definido en Reglas': { short: 'Sin Regla', varName: '--bad', bgVar: '--bad-bg' }
   };
 
   // Frases con las que el equipo documenta, en el comentario, que NO se espera un
@@ -313,7 +319,7 @@ window.__FI_COMMENTS__ = null;
   }
 
   function computeStats(records) {
-    var s = { total: records.length, 'Match Encontrado': 0, 'Fuera de Rango de Fecha': 0, 'No Aplica Cruce (regla)': 0, 'Justificado (Sin Cargo)': 0, 'Sin Match': 0 };
+    var s = { total: records.length, 'Match Encontrado': 0, 'Fuera de Rango de Fecha': 0, 'No Aplica Cruce (regla)': 0, 'Justificado (Sin Cargo)': 0, 'Sin Match': 0, 'Concepto No Definido en Reglas': 0 };
     for (var i = 0; i < records.length; i++) {
       var e = effectiveStatus(records[i]);
       if (s[e] === undefined) s[e] = 0;
@@ -339,8 +345,16 @@ window.__FI_COMMENTS__ = null;
 
   // Registros dentro del alcance actual (sede + ejecutiva + mes). Sirve de base
   // tanto para el KPI y las barras por grupo como para la tabla de detalle.
+  //
+  // Se excluyen las citas "Fuera de Alcance (posterior a corte)" -- son citas
+  // agendadas después de la fecha de corte del cruce, todavía no ocurren, así que no
+  // tiene sentido contarlas como pendientes ni como resueltas. Antes se colaban en el
+  // total sin aparecer en ningún bucket visible, lo que hacía que el % no cerrara
+  // (ej. "0 Sin Match + 0 Fuera de Rango" pero aun así <100%).
   function scopedRecords() {
-    return byMes(byEjecutiva(bySede(DATA, state.sede), state.ejecutiva), state.mes);
+    return byMes(byEjecutiva(bySede(DATA, state.sede), state.ejecutiva), state.mes).filter(function (r) {
+      return r.estatus !== 'Fuera de Alcance (posterior a corte)';
+    });
   }
 
   // DESCUENTOS no tiene sede confiable (ver nota en Code.gs), así que solo respeta
@@ -373,7 +387,7 @@ window.__FI_COMMENTS__ = null;
     var byGrupo = {};
     for (var i = 0; i < records.length; i++) {
       var r = records[i];
-      if (!byGrupo[r.grupo]) byGrupo[r.grupo] = { grupo: r.grupo, total: 0, 'Match Encontrado': 0, 'Fuera de Rango de Fecha': 0, 'No Aplica Cruce (regla)': 0, 'Justificado (Sin Cargo)': 0, 'Sin Match': 0 };
+      if (!byGrupo[r.grupo]) byGrupo[r.grupo] = { grupo: r.grupo, total: 0, 'Match Encontrado': 0, 'Fuera de Rango de Fecha': 0, 'No Aplica Cruce (regla)': 0, 'Justificado (Sin Cargo)': 0, 'Sin Match': 0, 'Concepto No Definido en Reglas': 0 };
       byGrupo[r.grupo].total++;
       var e = effectiveStatus(r);
       byGrupo[r.grupo][e] = (byGrupo[r.grupo][e] || 0) + 1;
@@ -386,11 +400,13 @@ window.__FI_COMMENTS__ = null;
 
   function detailRows() {
     var rows = scopedRecords().filter(function (r) {
-      return r.estatus === 'Sin Match' || r.estatus === 'Fuera de Rango de Fecha';
+      return r.estatus === 'Sin Match' || r.estatus === 'Fuera de Rango de Fecha' || r.estatus === 'Concepto No Definido en Reglas';
     });
     if (state.statusFilter !== 'ALL') {
       rows = rows.filter(function (r) {
-        return state.statusFilter === 'SIN' ? r.estatus === 'Sin Match' : r.estatus === 'Fuera de Rango de Fecha';
+        if (state.statusFilter === 'SIN') return r.estatus === 'Sin Match';
+        if (state.statusFilter === 'FUERA') return r.estatus === 'Fuera de Rango de Fecha';
+        return r.estatus === 'Concepto No Definido en Reglas';
       });
     }
     if (state.grupo !== 'ALL') rows = rows.filter(function (r) { return r.grupo === state.grupo; });
@@ -420,21 +436,23 @@ window.__FI_COMMENTS__ = null;
     var mesLbl = state.mes === 'ALL' ? 'Todo el año' : mesLabel(state.mes);
     var scopeLabel = mesLbl + ' · ' + sedeLabel + (state.ejecutiva !== 'ALL' ? ' · Ejecutiva: ' + state.ejecutiva : '');
 
-    // Pendientes = casos que TODAVÍA no cuentan como resueltos (excluye los que el
-    // equipo ya confirmó con cargo o justificó por comentario -- esos se reclasifican
-    // en effectiveStatus()).
-    var pendientes = (stats['Sin Match'] || 0) + (stats['Fuera de Rango de Fecha'] || 0);
+    // Pendientes = casos que TODAVÍA no cuentan como resueltos y necesitan revisión
+    // humana (excluye los que el equipo ya confirmó con cargo o justificó por
+    // comentario -- esos se reclasifican en effectiveStatus()). Incluye "Sin Regla"
+    // porque, aunque es un problema distinto (falta definir la regla, no falta el
+    // cargo), tampoco cuenta como resuelto y de lo contrario desaparecía del conteo.
+    var pendientes = (stats['Sin Match'] || 0) + (stats['Fuera de Rango de Fecha'] || 0) + (stats['Concepto No Definido en Reglas'] || 0);
 
     var html = '';
     html += '<div class="kpi-grid">';
     html += '<div class="card hero-card">';
     html += '<div class="hero-label">% de cargo ya resuelto &middot; ' + escapeHtml(scopeLabel) + '</div>';
     html += '<div class="hero-num" style="color:' + tierVar(pct) + '">' + pct1(pct) + '</div>';
-    html += '<div class="hero-sub">' + fmtInt(cargoCount(stats)) + ' de ' + fmtInt(stats.total) + ' citas ya con cargo, fuera de rango, no aplica (incluye duplicadas GDL), confirmadas o justificadas por comentario del equipo &mdash; quedan <strong>' + fmtInt(pendientes) + ' pendientes</strong> por revisar</div>';
+    html += '<div class="hero-sub">' + fmtInt(cargoCount(stats)) + ' de ' + fmtInt(stats.total) + ' citas ya con cargo, fuera de rango, no aplica (incluye duplicadas GDL), confirmadas o justificadas por comentario del equipo &mdash; quedan <strong>' + fmtInt(pendientes) + ' pendientes</strong> por revisar (incluye ' + fmtInt(stats['Concepto No Definido en Reglas'] || 0) + ' sin regla definida)</div>';
     html += '</div>';
 
     html += '<div class="stat-grid">';
-    var order = ['Match Encontrado', 'Sin Match', 'Fuera de Rango de Fecha', 'No Aplica Cruce (regla)', 'Justificado (Sin Cargo)'];
+    var order = ['Match Encontrado', 'Sin Match', 'Fuera de Rango de Fecha', 'No Aplica Cruce (regla)', 'Justificado (Sin Cargo)', 'Concepto No Definido en Reglas'];
     order.forEach(function (key) {
       var meta = STATUS_META[key];
       var n = stats[key] || 0;
@@ -594,7 +612,7 @@ window.__FI_COMMENTS__ = null;
 
     rows.forEach(function (r) {
       var meta = STATUS_META[r.estatus];
-      var chipClass = r.estatus === 'Sin Match' ? 'sin' : 'fuera';
+      var chipClass = r.estatus === 'Fuera de Rango de Fecha' ? 'fuera' : 'sin';
       var note = COMMENTS[r.id];
       var confirmado = note && note.cargado;
       var justificado = !confirmado && r.estatus === 'Sin Match' && note && justificaSinCargo(note.text);
@@ -655,9 +673,10 @@ window.__FI_COMMENTS__ = null;
 
   function renderStatusPills(root) {
     var opts = [
-      { key: 'ALL', label: 'Sin Match + Fuera de Rango' },
+      { key: 'ALL', label: 'Todos' },
       { key: 'SIN', label: 'Solo Sin Match' },
-      { key: 'FUERA', label: 'Solo Fuera de Rango' }
+      { key: 'FUERA', label: 'Solo Fuera de Rango' },
+      { key: 'SINREGLA', label: 'Solo Sin Regla' }
     ];
     var html = '';
     opts.forEach(function (o) {
@@ -899,11 +918,11 @@ window.__FI_COMMENTS__ = null;
     html += '<div id="root-body">' +
       '<div id="fi-load-status" class="note" style="padding:10px 24px"></div>' +
       '<div class="readonly-banner" id="fi-readonly-banner" style="display:none">Esta vista no tiene conexión de guardado activa: los comentarios se pueden escribir pero no se compartirán con el equipo hasta que se abra desde una sesión con guardado habilitado.</div>' +
-      '<section><div class="section-head"><h2>% de conversión</h2><div class="note">Qué tanto de la agenda ya quedó resuelto: tiene cargo, está fuera de rango (para revisar), no requiere cargo por regla, el equipo ya confirmó que sí se cobró, o el comentario explica por qué no se esperaba cargo (justificado). <strong>No es lo que falta</strong> — entre más alto, mejor.</div></div>' +
+      '<section><div class="section-head"><h2>% de conversión</h2><div class="note">Qué tanto de la agenda ya quedó resuelto: tiene cargo, está fuera de rango (para revisar), no requiere cargo por regla, el equipo ya confirmó que sí se cobró, o el comentario explica por qué no se esperaba cargo (justificado). No incluye citas todavía futuras (posteriores a la fecha de corte) ni cuenta como resuelto un concepto sin regla definida (Sin Regla, sigue pendiente). <strong>No es lo que falta</strong> — entre más alto, mejor.</div></div>' +
       '<div id="fi-kpi"></div></section>' +
       '<section><div class="section-head"><h2>Distribución por grupo</h2><div class="note">% ya resuelto de cada tipo de cita (mismo criterio de arriba), de mayor a menor. Un grupo con % bajo es el que más casos pendientes tiene por revisar.</div></div>' +
       '<div id="fi-bars"></div></section>' +
-      '<section><div class="section-head"><h2>Casos a revisar</h2><div class="note">Comenta si detectas que falta una regla, un concepto de cargo o una excepción — sirve como conocimiento para el equipo. Si confirmas "Ya tiene cargo", ese caso se suma al % de cargo de arriba. Si el comentario explica que NO se espera cargo (p.ej. "no requiere toma de sangre porque es inseminación", "se canceló el ciclo"), el caso se marca automáticamente como <span class="chip justified" style="vertical-align:1px">◆ Justificado</span> y también cuenta como resuelto, sin marcar la casilla.</div></div>' +
+      '<section><div class="section-head"><h2>Casos a revisar</h2><div class="note">Comenta si detectas que falta una regla, un concepto de cargo o una excepción — sirve como conocimiento para el equipo. Si confirmas "Ya tiene cargo", ese caso se suma al % de cargo de arriba. Si el comentario explica que NO se espera cargo (p.ej. "no requiere toma de sangre porque es inseminación", "se canceló el ciclo"), el caso se marca automáticamente como <span class="chip justified" style="vertical-align:1px">◆ Justificado</span> y también cuenta como resuelto, sin marcar la casilla. Los de chip "Sin Regla" son distintos: el concepto de esa cita no tiene ninguna fila en tu hoja Reglas (ni SI ni NO) — agrégala ahí para que deje de aparecer aquí.</div></div>' +
       '<div class="pillrow" id="fi-status-pills" style="margin-bottom:14px"></div>' +
       '<div id="fi-table"></div></section>' +
       '<section><div class="section-head"><h2>Descuentos</h2><div class="note">Qué ejecutiva y qué producto concentran más descuento, según la columna "% Dto." de CARGOS. La ejecutiva se determina por el médico (Profesional / Profesional Historia del cargo) — CARGOS no trae sede confiable, así que este ranking solo se filtra por mes, no por sede.</div></div>' +
