@@ -542,8 +542,33 @@ window.__FI_COMMENTS__ = null;
     return byMesPgt(CRUCE_PGT, state.mes);
   }
 
-  function crucePgtFiltrados() {
-    var rows = crucePgtScoped();
+  // Un checkbox "Ya tiene cargo (confirmado)" en la última columna reclasifica la
+  // factura como resuelta, igual que en el cruce principal (ver effectiveStatus) --
+  // usa el mismo COMMENTS global, por id, así que reutiliza el mismo componente de
+  // guardado (commentCellHtml / wireCommentInputs / saveRow) sin cambios.
+  function effectivePgtStatus(row) {
+    var note = COMMENTS[row.id];
+    if (note && note.cargado) return 'Match Encontrado';
+    return row.estatus;
+  }
+
+  function crucePgtCounts(records) {
+    var counts = { 'Match Encontrado': 0, 'Sin Match': 0, 'Fuera de Rango': 0 };
+    records.forEach(function (r) {
+      var e = effectivePgtStatus(r);
+      counts[e] = (counts[e] || 0) + 1;
+    });
+    return counts;
+  }
+
+  // Solo las facturas todavía sin resolver (por su estatus original del motor, no
+  // el efectivo) entran a la tabla de detalle -- así, cuando el equipo marca una
+  // como confirmada, la fila se queda visible con su estilo "confirmada" en vez de
+  // desaparecer de golpe (mismo criterio que "Casos a revisar" en el cruce principal).
+  function crucePgtDetailRows() {
+    var rows = crucePgtScoped().filter(function (r) {
+      return r.estatus === 'Sin Match' || r.estatus === 'Fuera de Rango';
+    });
     if (state.searchPgt.trim()) {
       var q = state.searchPgt.trim().toLowerCase();
       rows = rows.filter(function (r) {
@@ -555,43 +580,84 @@ window.__FI_COMMENTS__ = null;
     return rows;
   }
 
-  function renderCrucePGT(root) {
+  // ---------- render: cruce de PGTs -- cuadro resumen (arriba de la tabla) ----------
+  function renderCrucePgtSummary(root) {
     var scoped = crucePgtScoped();
-    var rows = crucePgtFiltrados();
-    var sinCargo = scoped.filter(function (r) { return !r.matched; }).length;
-    var matched = scoped.length - sinCargo;
-    var pct = scoped.length ? (matched / scoped.length) * 100 : 0;
+    var counts = crucePgtCounts(scoped);
+    var total = scoped.length;
+    var pct = total ? (counts['Match Encontrado'] / total) * 100 : 0;
 
-    var html = '<div class="note" style="margin-bottom:14px">Por cada factura de proveedor de PGT ("Base proveedores PGT"), busca si el paciente tiene un cargo en CARGOS con un concepto de "Regla proveedores PGT" (columna G) dentro del mes de recepción de la muestra y/o de entrega del reporte. No cambia ningún estatus del cruce principal — sirve para detectar facturas de proveedor que la clínica ya pagó pero que todavía no se le trasladaron al paciente como cargo. <strong>' +
-      fmtInt(matched) + ' de ' + fmtInt(scoped.length) + ' facturas con cargo encontrado</strong> (' + pct1(pct) + ') &middot; ' + fmtInt(sinCargo) + ' sin cargo en el mes correspondiente.</div>';
+    var html = '<div class="kpi-grid">';
+    html += '<div class="card hero-card">';
+    html += '<div class="hero-label">% de facturas PGT con cargo encontrado</div>';
+    html += '<div class="hero-num" style="color:' + tierVar(pct) + '">' + pct1(pct) + '</div>';
+    html += '<div class="hero-sub">' + fmtInt(counts['Match Encontrado']) + ' de ' + fmtInt(total) + ' facturas de proveedor ya con su cargo correspondiente al paciente en el mes esperado.</div>';
+    html += '</div>';
+    html += '<div class="stat-grid">';
+    var order = [
+      { key: 'Match Encontrado', label: 'Match', varName: '--good' },
+      { key: 'Sin Match', label: 'Sin Match', varName: '--bad' },
+      { key: 'Fuera de Rango', label: 'Fuera de Rango', varName: '--warn' }
+    ];
+    order.forEach(function (o) {
+      var n = counts[o.key] || 0;
+      var p = total ? (n / total) * 100 : 0;
+      html += '<div class="card stat">';
+      html += '<div class="lbl"><span class="dot" style="background:var(' + o.varName + ')"></span>' + escapeHtml(o.label) + '</div>';
+      html += '<div class="n" style="color:var(' + o.varName + ')">' + fmtInt(n) + '</div>';
+      html += '<div class="pct">' + pct1(p) + ' del total</div>';
+      html += '</div>';
+    });
+    html += '</div>'; // stat-grid
+    html += '</div>'; // kpi-grid
+    root.innerHTML = html;
+  }
 
-    html += '<div class="toolbar">';
+  // ---------- render: cruce de PGTs -- tabla de facturas sin cargo ----------
+  function renderCrucePGT(root) {
+    var rows = crucePgtDetailRows();
+    var totalPendientes = crucePgtScoped().filter(function (r) {
+      return r.estatus === 'Sin Match' || r.estatus === 'Fuera de Rango';
+    }).length;
+
+    var html = '<div class="toolbar">';
     html += '<input class="search" id="fi-pgt-search" type="text" placeholder="Buscar por paciente, concepto o ID Orden LIMS…" value="' + escapeHtml(state.searchPgt) + '">';
     html += '<span class="count-badge">' + fmtInt(rows.length) + ' registros</span>';
     html += '</div>';
 
     if (!rows.length) {
-      html += '<div class="table-wrap"><div class="empty">' + (scoped.length ? 'Sin resultados para esta búsqueda.' : 'No hay facturas de proveedores PGT en este alcance.') + '</div></div>';
+      var emptyMsg = totalPendientes ? 'Sin resultados para esta búsqueda.' : 'No quedan facturas de proveedor PGT sin cargo en este alcance.';
+      html += '<div class="table-wrap"><div class="empty">' + emptyMsg + '</div></div>';
       root.innerHTML = html;
       return;
     }
 
     html += '<div class="table-wrap"><table><thead><tr>' +
-      '<th>Paciente</th><th>Fecha recepción</th><th>Fecha entrega reporte</th><th>ID Orden LIMS</th><th>Costo proveedor</th><th>Estatus</th><th>Cargo encontrado</th>' +
+      '<th>Paciente</th><th>Fecha recepción</th><th>Fecha entrega reporte</th><th>ID Orden LIMS</th><th>Costo proveedor</th>' +
+      '<th>Estatus</th><th>Cargo relacionado</th><th>Comentario</th>' +
       '</tr></thead><tbody>';
     rows.forEach(function (r) {
-      html += '<tr>';
+      var note = COMMENTS[r.id];
+      var confirmado = note && note.cargado;
+      var chipClass = r.estatus === 'Fuera de Rango' ? 'fuera' : 'sin';
+      var chipLabel = r.estatus === 'Fuera de Rango' ? 'Fuera de Rango' : 'Sin Match';
+      html += '<tr' + (confirmado ? ' class="row-confirmed"' : '') + '>';
       html += '<td>' + escapeHtml(r.paciente) + '</td>';
       html += '<td>' + fmtDate(r.fechaRecepcion) + '</td>';
       html += '<td>' + fmtDate(r.fechaEntregaReporte) + '</td>';
       html += '<td>' + escapeHtml(r.idOrdenLims) + '</td>';
       html += '<td class="diff">' + (r.costo !== null && r.costo !== undefined ? fmtMoney(r.costo) : '—') + '</td>';
-      html += '<td><span class="chip ' + (r.matched ? 'confirm' : 'sin') + '">' + (r.matched ? '✓ Cargo encontrado' : '✕ Sin cargo') + '</span></td>';
-      html += '<td class="cargo-cell">' + (r.matched ? '<span class="cc">' + escapeHtml(r.cargoConcepto) + '</span>' + fmtDate(r.cargoFecha) : '—') + '</td>';
+      html += '<td><span class="chip ' + chipClass + '">' + chipLabel + '</span>' +
+        (confirmado ? ' <span class="chip confirm">✓ Confirmado</span>' : '') + '</td>';
+      html += '<td class="cargo-cell">' + (r.estatus === 'Fuera de Rango'
+        ? '<span class="cc">' + escapeHtml(r.cargoConcepto) + '</span>' + fmtDate(r.cargoFecha) + ' (mes distinto)'
+        : '—') + '</td>';
+      html += '<td>' + commentCellHtml(r) + '</td>';
       html += '</tr>';
     });
     html += '</tbody></table></div>';
     root.innerHTML = html;
+    wireCommentInputs(root);
   }
 
   // ---------- render: detail table ----------
@@ -715,6 +781,7 @@ window.__FI_COMMENTS__ = null;
     renderGrupoBars(document.getElementById('fi-bars'));
     renderStatusPills(document.getElementById('fi-status-pills'));
     renderTable(document.getElementById('fi-table'));
+    renderCrucePgtSummary(document.getElementById('fi-pgt-summary'));
     renderCrucePGT(document.getElementById('fi-pgt'));
     renderDescuentos(document.getElementById('fi-descuentos'));
     wireTopEvents();
@@ -860,6 +927,11 @@ window.__FI_COMMENTS__ = null;
     if (rerenderStats) {
       renderKPI(document.getElementById('fi-kpi'));
       renderGrupoBars(document.getElementById('fi-bars'));
+      // Comparte COMMENTS con el cruce de PGTs -- un checkbox de cualquiera de las
+      // dos tablas puede mover sus conteos, así que se refresca también ese resumen
+      // (la propia fila ya se actualiza sin re-render vía updateRowConfirmedVisual).
+      var pgtSummaryEl = document.getElementById('fi-pgt-summary');
+      if (pgtSummaryEl) renderCrucePgtSummary(pgtSummaryEl);
     }
 
     if (!apiReady) {
@@ -946,7 +1018,8 @@ window.__FI_COMMENTS__ = null;
       '<section><div class="section-head"><h2>Casos a revisar</h2><div class="note">Comenta si detectas que falta una regla, un concepto de cargo o una excepción — sirve como conocimiento para el equipo. Si confirmas "Ya tiene cargo", ese caso se suma al % de cargo de arriba. Si el comentario explica que NO se espera cargo (p.ej. "no requiere toma de sangre porque es inseminación", "se canceló el ciclo"), el caso se marca automáticamente como <span class="chip justified" style="vertical-align:1px">◆ Justificado</span> y también cuenta como resuelto, sin marcar la casilla. Los de chip "Sin Regla" son distintos: el concepto de esa cita no tiene ninguna fila en tu hoja Reglas (ni SI ni NO) — agrégala ahí para que deje de aparecer aquí.</div></div>' +
       '<div class="pillrow" id="fi-status-pills" style="margin-bottom:14px"></div>' +
       '<div id="fi-table"></div></section>' +
-      '<section><div class="section-head"><h2>Cruce de PGTs - Proveedor y cargos</h2><div class="note">Por cada factura que un proveedor de PGT ya envió ("Base proveedores PGT"), verifica que el paciente tenga un cargo correspondiente en CARGOS (concepto de "Regla proveedores PGT" columna G) dentro del mes de recepción de la muestra y/o de entrega del reporte. Detecta pacientes a los que ya se le pagó al proveedor pero todavía no se les cargó el estudio.</div></div>' +
+      '<section><div class="section-head"><h2>Cruce de PGTs - Proveedor y cargos</h2><div class="note">Por cada factura que un proveedor de PGT ya envió ("Base proveedores PGT"), verifica que el paciente tenga un cargo correspondiente en CARGOS (concepto de "Regla proveedores PGT" columna G) dentro del mes de recepción de la muestra y/o de entrega del reporte. La tabla de abajo solo muestra las que todavía no tienen cargo — marca "Ya tiene cargo" si lo confirmas a mano (cuenta como match) o deja un comentario.</div></div>' +
+      '<div id="fi-pgt-summary" style="margin-bottom:18px"></div>' +
       '<div id="fi-pgt"></div></section>' +
       '<section><div class="section-head"><h2>Descuentos</h2><div class="note">Qué ejecutiva y qué producto concentran más descuento, según la columna "% Dto." de CARGOS. La ejecutiva se determina por el médico (Profesional / Profesional Historia del cargo) — CARGOS no trae sede confiable, así que este ranking solo se filtra por mes, no por sede.</div></div>' +
       '<div id="fi-descuentos"></div></section>' +
