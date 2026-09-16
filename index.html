@@ -136,19 +136,12 @@ window.__FI_COMMENTS__ = null;
   // con byMes() para que la sección respete el mismo filtro de mes que el resto.
   var DESCUENTOS = [];
 
-  // Verificación de cantidad por paciente (buildAlertasCantidad): paciente+concepto
-  // donde hay menos cargos que citas completadas, sin restricción de ventana de
-  // fecha de regla (solo una ventana amplia de 24 meses) -- señal de casos
-  // extraordinarios a revisar a mano, no un cambio de estatus. No se filtra por
-  // sede/mes/ejecutiva: es un análisis independiente de esos filtros.
-  var ALERTAS_CANTIDAD = [];
-
-  // Resumen agregado por grupo de esa misma verificación (buildAlertasCantidad
-  // también lo calcula): total de citas vs. total de cargos encontrados por grupo,
-  // sumando TODAS las combinaciones paciente+concepto (no solo las que tienen
-  // faltante). Un balance positivo (más cargos que citas) es normal -- paquetes o
-  // cargos adicionales por visita -- y no es un problema; uno negativo sí lo es.
-  var RESUMEN_CANTIDAD_GRUPO = [];
+  // Cruce de PGTs - Proveedor y cargos (buildCrucePGT): por cada factura de
+  // proveedor de PGT ("Base proveedores PGT"), si el paciente tiene o no un cargo
+  // en CARGOS con un concepto de "Regla proveedores PGT" columna G dentro del mes
+  // de recepción de la muestra y/o de entrega del reporte. Viene ya calculado del
+  // motor -- aquí solo se filtra por mes (fecha de recepción) y se busca por texto.
+  var CRUCE_PGT = [];
 
   var SEDES = [
     { key: 'ALL', label: 'Todas las sedes' },
@@ -225,7 +218,7 @@ window.__FI_COMMENTS__ = null;
     return false;
   }
 
-  var state = { sede: 'ALL', statusFilter: 'ALL', search: '', grupo: 'ALL', ejecutiva: 'ALL', mes: 'ALL', searchCantidad: '' };
+  var state = { sede: 'ALL', statusFilter: 'ALL', search: '', grupo: 'ALL', ejecutiva: 'ALL', mes: 'ALL', searchPgt: '' };
 
   var MESES_ES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
 
@@ -250,6 +243,8 @@ window.__FI_COMMENTS__ = null;
     // así el filtro nunca esconde un mes con descuentos aunque no tenga citas
     // en la agenda dentro del alcance actual.
     DESCUENTOS.forEach(function (r) { if (r.fecha) present[r.fecha.slice(0, 7)] = true; });
+    // Igual con el Cruce de PGTs (fecha de recepción de la muestra).
+    CRUCE_PGT.forEach(function (r) { if (r.fechaRecepcion) present[r.fechaRecepcion.slice(0, 7)] = true; });
     return Object.keys(present).filter(function (m) { return m.slice(0, 4) === ANIO_FILTRO_MESES; }).sort();
   }
   var apiReady = false;
@@ -534,78 +529,65 @@ window.__FI_COMMENTS__ = null;
     root.innerHTML = html;
   }
 
-  // ---------- render: verificación de cantidad por paciente ----------
-  function alertasCantidadFiltradas() {
-    var rows = ALERTAS_CANTIDAD;
-    if (state.searchCantidad.trim()) {
-      var q = state.searchCantidad.trim().toLowerCase();
+  // ---------- render: cruce de PGTs - Proveedor y cargos ----------
+  // Respeta el filtro de mes (según fecha de recepción de la muestra) para que se
+  // pueda revisar un mes cerrado a la vez, igual que el resto del dashboard -- no
+  // se filtra por sede/ejecutiva porque "Base proveedores PGT" no trae esos datos.
+  function byMesPgt(records, mesKey) {
+    if (mesKey === 'ALL') return records;
+    return records.filter(function (r) { return r.fechaRecepcion && r.fechaRecepcion.slice(0, 7) === mesKey; });
+  }
+
+  function crucePgtScoped() {
+    return byMesPgt(CRUCE_PGT, state.mes);
+  }
+
+  function crucePgtFiltrados() {
+    var rows = crucePgtScoped();
+    if (state.searchPgt.trim()) {
+      var q = state.searchPgt.trim().toLowerCase();
       rows = rows.filter(function (r) {
         return (r.paciente || '').toLowerCase().indexOf(q) !== -1 ||
-          (r.concepto || '').toLowerCase().indexOf(q) !== -1 ||
-          (r.grupo || '').toLowerCase().indexOf(q) !== -1;
+          (r.cargoConcepto || '').toLowerCase().indexOf(q) !== -1 ||
+          (String(r.idOrdenLims || '')).toLowerCase().indexOf(q) !== -1;
       });
     }
     return rows;
   }
 
-  // Tabla resumen: por grupo, total de citas vs. total de cargos encontrados (suma
-  // de TODAS las combinaciones paciente+concepto, no solo las que tienen faltante).
-  // "Balance" positivo = más cargos que citas (normal: paquetes, cargos adicionales
-  // por visita) &mdash; no es un problema. Balance negativo = el grupo, en conjunto,
-  // tiene menos cargos que citas completadas: ahí sí conviene revisar.
-  function resumenCantidadGrupoHtml() {
-    if (!RESUMEN_CANTIDAD_GRUPO.length) return '';
-    var html = '<div class="table-wrap" style="margin-bottom:18px"><table><thead><tr>' +
-      '<th>Grupo</th><th>Citas</th><th>Cargos encontrados</th><th>Balance</th><th>Combinaciones con faltante</th>' +
-      '</tr></thead><tbody>';
-    RESUMEN_CANTIDAD_GRUPO.forEach(function (g) {
-      var balance = g.cargos - g.citas;
-      var balanceClass = balance < 0 ? 'sin' : 'confirm';
-      var balanceTxt = (balance > 0 ? '+' : '') + fmtInt(balance);
-      html += '<tr>';
-      html += '<td>' + escapeHtml(g.grupo) + '</td>';
-      html += '<td>' + fmtInt(g.citas) + '</td>';
-      html += '<td>' + fmtInt(g.cargos) + '</td>';
-      html += '<td><span class="chip ' + balanceClass + '">' + balanceTxt + '</span></td>';
-      html += '<td>' + fmtInt(g.combinacionesConFaltante) + ' de ' + fmtInt(g.combinaciones) + '</td>';
-      html += '</tr>';
-    });
-    html += '</tbody></table></div>';
-    return html;
-  }
+  function renderCrucePGT(root) {
+    var scoped = crucePgtScoped();
+    var rows = crucePgtFiltrados();
+    var sinCargo = scoped.filter(function (r) { return !r.matched; }).length;
+    var matched = scoped.length - sinCargo;
+    var pct = scoped.length ? (matched / scoped.length) * 100 : 0;
 
-  function renderAlertasCantidad(root) {
-    var rows = alertasCantidadFiltradas();
-    var totalFaltantes = ALERTAS_CANTIDAD.reduce(function (acc, r) { return acc + r.faltantes; }, 0);
-
-    var html = '<div class="note" style="margin-bottom:14px">Por grupo, total de citas terminadas contra total de cargos encontrados (suma de todas las combinaciones paciente+concepto). Un balance positivo (más cargos que citas) es normal — paquetes o cargos adicionales por visita — y no es un problema; uno negativo sí lo es.</div>';
-    html += resumenCantidadGrupoHtml();
-
-    html += '<div class="note" style="margin-bottom:14px">Abajo, el detalle por paciente y concepto de las combinaciones con menos cargos que citas completadas &mdash; sin límite de la ventana de fecha de la regla (solo se ignoran cargos de más de 24 meses atrás). No cambia ningún estatus: es una señal para revisar a mano casos donde el cargo pudo hacerse fuera de mes o de la ventana normal. ' +
-      fmtInt(ALERTAS_CANTIDAD.length) + ' combinaciones paciente + concepto con menos cargos que citas &middot; ' + fmtInt(totalFaltantes) + ' cargos aparentemente faltantes en total.</div>';
+    var html = '<div class="note" style="margin-bottom:14px">Por cada factura de proveedor de PGT ("Base proveedores PGT"), busca si el paciente tiene un cargo en CARGOS con un concepto de "Regla proveedores PGT" (columna G) dentro del mes de recepción de la muestra y/o de entrega del reporte. No cambia ningún estatus del cruce principal — sirve para detectar facturas de proveedor que la clínica ya pagó pero que todavía no se le trasladaron al paciente como cargo. <strong>' +
+      fmtInt(matched) + ' de ' + fmtInt(scoped.length) + ' facturas con cargo encontrado</strong> (' + pct1(pct) + ') &middot; ' + fmtInt(sinCargo) + ' sin cargo en el mes correspondiente.</div>';
 
     html += '<div class="toolbar">';
-    html += '<input class="search" id="fi-cantidad-search" type="text" placeholder="Buscar por paciente, concepto o grupo…" value="' + escapeHtml(state.searchCantidad) + '">';
+    html += '<input class="search" id="fi-pgt-search" type="text" placeholder="Buscar por paciente, concepto o ID Orden LIMS…" value="' + escapeHtml(state.searchPgt) + '">';
     html += '<span class="count-badge">' + fmtInt(rows.length) + ' registros</span>';
     html += '</div>';
 
     if (!rows.length) {
-      html += '<div class="table-wrap"><div class="empty">' + (ALERTAS_CANTIDAD.length ? 'Sin resultados para esta búsqueda.' : 'No se detectaron faltantes de cantidad.') + '</div></div>';
+      html += '<div class="table-wrap"><div class="empty">' + (scoped.length ? 'Sin resultados para esta búsqueda.' : 'No hay facturas de proveedores PGT en este alcance.') + '</div></div>';
       root.innerHTML = html;
       return;
     }
 
     html += '<div class="table-wrap"><table><thead><tr>' +
-      '<th>Paciente</th><th>Grupo</th><th>Concepto</th><th>Citas</th><th>Cargos encontrados</th><th>Faltantes</th>' +
+      '<th>Paciente</th><th>Fecha recepción</th><th>Fecha entrega reporte</th><th>ID Orden LIMS</th><th>Costo proveedor</th><th>Estatus</th><th>Cargo encontrado</th>' +
       '</tr></thead><tbody>';
     rows.forEach(function (r) {
       html += '<tr>';
       html += '<td>' + escapeHtml(r.paciente) + '</td>';
-      html += '<td>' + escapeHtml(r.grupo) + '</td>';
-      html += '<td>' + escapeHtml(r.concepto) + '</td>';
-      html += '<td>' + fmtInt(r.citasCount) + '</td>';
-      html += '<td>' + fmtInt(r.cargosCount) + '</td>';
-      html += '<td><span class="chip fuera">' + fmtInt(r.faltantes) + '</span></td>';
+      html += '<td>' + fmtDate(r.fechaRecepcion) + '</td>';
+      html += '<td>' + fmtDate(r.fechaEntregaReporte) + '</td>';
+      html += '<td>' + escapeHtml(r.idOrdenLims) + '</td>';
+      html += '<td class="diff">' + (r.costo !== null && r.costo !== undefined ? fmtMoney(r.costo) : '—') + '</td>';
+      html += '<td><span class="chip ' + (r.matched ? 'confirm' : 'sin') + '">' + (r.matched ? '✓ Cargo encontrado' : '✕ Sin cargo') + '</span></td>';
+      html += '<td class="cargo-cell">' + (r.matched ? '<span class="cc">' + escapeHtml(r.cargoConcepto) + '</span>' + fmtDate(r.cargoFecha) : '—') + '</td>';
       html += '</tr>';
     });
     html += '</tbody></table></div>';
@@ -733,12 +715,12 @@ window.__FI_COMMENTS__ = null;
     renderGrupoBars(document.getElementById('fi-bars'));
     renderStatusPills(document.getElementById('fi-status-pills'));
     renderTable(document.getElementById('fi-table'));
+    renderCrucePGT(document.getElementById('fi-pgt'));
     renderDescuentos(document.getElementById('fi-descuentos'));
-    renderAlertasCantidad(document.getElementById('fi-cantidad'));
     wireTopEvents();
   }
 
-  // renderTable() y renderAlertasCantidad() reemplazan su propio toolbar (con el
+  // renderTable() y renderCrucePGT() reemplazan su propio toolbar (con el
   // input de búsqueda y el select de grupo) cada vez que se re-renderizan -- eso
   // destruye el elemento DOM anterior y, con él, cualquier listener pegado
   // directamente. Por eso estos dos "wire*" son funciones aparte que se pueden
@@ -766,14 +748,14 @@ window.__FI_COMMENTS__ = null;
     }
   }
 
-  function wireCantidadSearch() {
-    var cantidadSearchEl = document.getElementById('fi-cantidad-search');
-    if (cantidadSearchEl) {
-      cantidadSearchEl.addEventListener('input', function () {
-        state.searchCantidad = cantidadSearchEl.value;
-        renderAlertasCantidad(document.getElementById('fi-cantidad'));
-        wireCantidadSearch();
-        var el = document.getElementById('fi-cantidad-search');
+  function wireCrucePgtSearch() {
+    var pgtSearchEl = document.getElementById('fi-pgt-search');
+    if (pgtSearchEl) {
+      pgtSearchEl.addEventListener('input', function () {
+        state.searchPgt = pgtSearchEl.value;
+        renderCrucePGT(document.getElementById('fi-pgt'));
+        wireCrucePgtSearch();
+        var el = document.getElementById('fi-pgt-search');
         if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
       });
     }
@@ -811,7 +793,7 @@ window.__FI_COMMENTS__ = null;
         render();
       });
     }
-    wireCantidadSearch();
+    wireCrucePgtSearch();
   }
 
   function renderStatusPillsOnly() {
@@ -919,8 +901,7 @@ window.__FI_COMMENTS__ = null;
         if (!resp || !resp.ok) throw new Error((resp && resp.error) || 'Respuesta inválida del servidor');
         DATA = resp.registros || [];
         DESCUENTOS = resp.descuentoRegistros || [];
-        ALERTAS_CANTIDAD = resp.alertasCantidad || [];
-        RESUMEN_CANTIDAD_GRUPO = resp.resumenCantidadGrupo || [];
+        CRUCE_PGT = resp.crucePGT || [];
         COMMENTS = {};
         Object.keys(resp.comentarios || {}).forEach(function (id) {
           var c = resp.comentarios[id];
@@ -965,10 +946,10 @@ window.__FI_COMMENTS__ = null;
       '<section><div class="section-head"><h2>Casos a revisar</h2><div class="note">Comenta si detectas que falta una regla, un concepto de cargo o una excepción — sirve como conocimiento para el equipo. Si confirmas "Ya tiene cargo", ese caso se suma al % de cargo de arriba. Si el comentario explica que NO se espera cargo (p.ej. "no requiere toma de sangre porque es inseminación", "se canceló el ciclo"), el caso se marca automáticamente como <span class="chip justified" style="vertical-align:1px">◆ Justificado</span> y también cuenta como resuelto, sin marcar la casilla. Los de chip "Sin Regla" son distintos: el concepto de esa cita no tiene ninguna fila en tu hoja Reglas (ni SI ni NO) — agrégala ahí para que deje de aparecer aquí.</div></div>' +
       '<div class="pillrow" id="fi-status-pills" style="margin-bottom:14px"></div>' +
       '<div id="fi-table"></div></section>' +
+      '<section><div class="section-head"><h2>Cruce de PGTs - Proveedor y cargos</h2><div class="note">Por cada factura que un proveedor de PGT ya envió ("Base proveedores PGT"), verifica que el paciente tenga un cargo correspondiente en CARGOS (concepto de "Regla proveedores PGT" columna G) dentro del mes de recepción de la muestra y/o de entrega del reporte. Detecta pacientes a los que ya se le pagó al proveedor pero todavía no se les cargó el estudio.</div></div>' +
+      '<div id="fi-pgt"></div></section>' +
       '<section><div class="section-head"><h2>Descuentos</h2><div class="note">Qué ejecutiva y qué producto concentran más descuento, según la columna "% Dto." de CARGOS. La ejecutiva se determina por el médico (Profesional / Profesional Historia del cargo) — CARGOS no trae sede confiable, así que este ranking solo se filtra por mes, no por sede.</div></div>' +
       '<div id="fi-descuentos"></div></section>' +
-      '<section><div class="section-head"><h2>Verificación de cantidad por paciente</h2><div class="note">Segunda pasada, aparte de las reglas de fecha: por paciente + concepto, compara cuántas citas completadas hay contra cuántos cargos existen para ese paciente (ventana amplia de 24 meses, sin la restricción normal de la regla). Detecta casos extraordinarios donde el cargo se hizo fuera de mes o de la ventana habitual — no cambia ningún estatus, es para revisar a mano.</div></div>' +
-      '<div id="fi-cantidad"></div></section>' +
       '<footer>Fertilidad Integral — Auditoría de cruce Agenda vs. Cargos</footer>' +
       '</div>';
     root.innerHTML = html;
