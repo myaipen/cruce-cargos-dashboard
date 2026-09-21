@@ -89,6 +89,9 @@ tr.row-confirmed:hover td{background:var(--good-bg)}
 tr.row-justified td{background:var(--neutral-bg)}
 tr.row-justified:hover td{background:var(--neutral-bg)}
 .chip.justified{background:var(--surface);color:var(--neutral);border:1px solid var(--line-strong)}
+tr.row-falta-check td{background:var(--warn-bg)}
+tr.row-falta-check:hover td{background:var(--warn-bg)}
+.chip.falta-check{background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn)}
 .confirm-check{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--muted);font-weight:600;margin-bottom:5px;cursor:pointer}
 .confirm-check input{accent-color:var(--good);cursor:pointer}
 .cargo-cell{font-size:12px;color:var(--muted);max-width:220px}
@@ -214,6 +217,29 @@ window.__FI_COMMENTS__ = null;
     if (!texto) return false;
     for (var i = 0; i < SIN_CARGO_PATTERNS.length; i++) {
       if (SIN_CARGO_PATTERNS[i].test(texto)) return true;
+    }
+    return false;
+  }
+
+  // 2026-09-21: distinto a SIN_CARGO_PATTERNS (que dice "no se esperaba cargo").
+  // Estas frases son lo OPUESTO: el comentario afirma que el cargo SÍ se aplicó
+  // ("se cargó...", "ya se cargó...") pero la casilla "Ya tiene cargo" se quedó
+  // sin marcar -- típicamente porque el texto se escribió como nota y se olvidó
+  // marcar la casilla. El comentario sí se guardó -- el caso es que nada mueve
+  // el % sin la casilla. Esto NO resuelve el caso automáticamente (solo un
+  // humano debe confirmar marcando la casilla); solo lo resalta en la tabla
+  // para que salte a la vista.
+  var CARGO_YA_APLICADO_PATTERNS = [
+    /\bse\s+carg(o|ó)\b/i,
+    /\bya\s+(se\s+)?carg(o|ó)\b/i,
+    /\bya\s+(esta|está)\s+cargad[oa]\b/i,
+    /\bcargo\s+ya\s+(hecho|realizado|aplicado)\b/i
+  ];
+  function pareceCargoYaAplicadoSinCheck(row, note) {
+    if (!note || note.cargado || !note.text) return false;
+    if (row.estatus !== 'Sin Match' && row.estatus !== 'Fuera de Rango de Fecha') return false;
+    for (var i = 0; i < CARGO_YA_APLICADO_PATTERNS.length; i++) {
+      if (CARGO_YA_APLICADO_PATTERNS[i].test(note.text)) return true;
     }
     return false;
   }
@@ -703,7 +729,8 @@ window.__FI_COMMENTS__ = null;
       var note = COMMENTS[r.id];
       var confirmado = note && note.cargado;
       var justificado = !confirmado && r.estatus === 'Sin Match' && note && justificaSinCargo(note.text);
-      html += '<tr' + (confirmado ? ' class="row-confirmed"' : (justificado ? ' class="row-justified"' : '')) + '>';
+      var faltaCheck = !confirmado && !justificado && pareceCargoYaAplicadoSinCheck(r, note);
+      html += '<tr' + (confirmado ? ' class="row-confirmed"' : (justificado ? ' class="row-justified"' : (faltaCheck ? ' class="row-falta-check"' : ''))) + '>';
       html += '<td>' + escapeHtml(r.grupo) + '</td>';
       html += '<td><span class="chip sede">' + escapeHtml(r.sede) + '</span></td>';
       html += '<td>' + escapeHtml(r.paciente) + (r.nhc ? '<br><span style="color:var(--muted);font-size:11px">' + escapeHtml(r.nhc) + '</span>' : '') + '</td>';
@@ -711,7 +738,8 @@ window.__FI_COMMENTS__ = null;
       html += '<td>' + escapeHtml(r.concepto) + '</td>';
       html += '<td><span class="chip ' + chipClass + '">' + escapeHtml(meta.short) + '</span>' +
         (confirmado ? ' <span class="chip confirm">✓ Confirmado</span>' : '') +
-        (justificado ? ' <span class="chip justified">◆ Justificado</span>' : '') + '</td>';
+        (justificado ? ' <span class="chip justified">◆ Justificado</span>' : '') +
+        (faltaCheck ? ' <span class="chip falta-check" title="El comentario dice que ya se cargó, pero falta marcar la casilla &quot;Ya tiene cargo&quot;">⚠ Falta marcar casilla</span>' : '') + '</td>';
       if (r.estatus === 'Fuera de Rango de Fecha') {
         html += '<td class="cargo-cell"><span class="cc">' + escapeHtml(r.conceptoCargo) + '</span>' + fmtDate(r.fechaCargo) + '</td>';
         html += '<td class="diff">' + (r.diffDias > 0 ? '+' : '') + r.diffDias + 'd</td>';
