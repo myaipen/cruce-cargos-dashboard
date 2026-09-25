@@ -157,7 +157,12 @@ window.__FI_COMMENTS__ = null;
 
   // Orden preferido de ejecutivas (las de la hoja "Experiencia"); cualquier otra
   // que aparezca en los datos se agrega al final, y "Sin asignar" siempre al final.
-  var EJECUTIVA_ORDER = ['Reyna', 'Sharon', 'Lucía', 'Jacqueline', 'Jimena', 'Wendy', 'Alondra', 'Viviana', 'Externos'];
+  // 2026-09-25: Reyna salió del catálogo (Giovanni López Salamanca pasó a Ana);
+  // Eva es nueva (tomó a Jairo Hernando Pedraza Pinto y Monica Olavarria, antes
+  // de Lucía). Si alguna de estas vuelve a tener citas asignadas, reaparece sola
+  // en el filtro vía getEjecutivas() aunque no esté aquí -- esta lista es solo
+  // el orden preferido, no una lista cerrada.
+  var EJECUTIVA_ORDER = ['Ana', 'Sharon', 'Eva', 'Lucía', 'Jacqueline', 'Jimena', 'Wendy', 'Alondra', 'Viviana', 'Externos'];
 
   function getEjecutivas() {
     var present = {};
