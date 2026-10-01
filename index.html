@@ -209,14 +209,25 @@ window.__FI_COMMENTS__ = null;
   // patrones reales vistos en los comentarios del equipo -- amplíala si aparecen
   // frases nuevas y consistentes.
   var SIN_CARGO_PATTERNS = [
-    /\bno\s+(se\s+)?(carga|cargó|cobra|cobró)\b/i,
+    // 2026-10-01: "\b" justo después de una vocal acentuada (ó) no funciona como
+    // límite de palabra en JS cuando lo que sigue es fin de cadena o puntuación
+    // (ninguno de los dos lados es "\w", así que no hay frontera) -- por eso
+    // "no se cargó." o "no se cargó" (sin nada después) NO se detectaban. Se
+    // corrige con (?!\w) en vez de \b en los patrones que terminan justo en
+    // la vocal acentuada.
+    /\bno\s+(se\s+)?(carga|cargó|cobra|cobró)(?!\w)/i,
     /\bno\s+(existe|hay|tiene|genera|corresponde|amerita)\s+cargo\b/i,
     /\bsin\s+cargo\b/i,
     /\bno\s+debe(\s+de)?\s+cargarse\b/i,
     /\bno\s+requiere\s+(toma\s+de\s+sangre|perfil\s+hormonal|cargo)\b/i,
     /\bno\s+se\s+(le\s+)?toma(n)?\s+(perfil\s+hormonal|estudios?)\b/i,
     /\bse\s+cancel[oó]\s+el\s+ciclo\b/i,
-    /\bno\s+(lleg[oó]|llega)\s+a\s+(la\s+)?cita\b/i
+    /\bno\s+(lleg[oó]|llega)\s+a\s+(la\s+)?cita\b/i,
+    // 2026-10-01: la ejecutiva reporta "no se realizó la cita/el procedimiento" --
+    // la cita no se llevó a cabo, así que no debía generar cargo. Se trata igual
+    // que los demás casos de "no se esperaba cargo" (ver nota arriba).
+    /\bno\s+se\s+realiz[oó](?!\w)/i,
+    /\bno\s+se\s+llev[oó]\s+a\s+cabo\b/i
   ];
   function justificaSinCargo(texto) {
     if (!texto) return false;
