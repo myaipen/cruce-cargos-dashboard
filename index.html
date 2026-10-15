@@ -146,6 +146,13 @@ window.__FI_COMMENTS__ = null;
   // motor -- aquí solo se filtra por mes (fecha de recepción) y se busca por texto.
   var CRUCE_PGT = [];
 
+  // 2026-10-15: regla complementaria "Captura ovular -> almacenamiento de 1 o 5 años".
+  // Viene calculada del motor (ver buildCruceAlmacenamiento en Code.gs); aquí solo se
+  // filtra por sede/ejecutiva/mes y se busca por texto. Cada fila trae su propio id
+  // ("alm-<id de la cita>"), así que sus comentarios y su casilla "Ya tiene cargo" son
+  // independientes de los del cruce principal.
+  var CRUCE_ALM = [];
+
   var SEDES = [
     { key: 'ALL', label: 'Todas las sedes' },
     { key: 'CDMX', label: 'Ciudad de México' },
@@ -262,7 +269,7 @@ window.__FI_COMMENTS__ = null;
     return false;
   }
 
-  var state = { sede: 'ALL', statusFilter: 'ALL', search: '', grupo: 'ALL', ejecutiva: 'ALL', mes: 'ALL', searchPgt: '' };
+  var state = { sede: 'ALL', statusFilter: 'ALL', search: '', grupo: 'ALL', ejecutiva: 'ALL', mes: 'ALL', searchPgt: '', searchAlm: '' };
 
   var MESES_ES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
 
@@ -704,6 +711,143 @@ window.__FI_COMMENTS__ = null;
     wireCommentInputs(root);
   }
 
+  // ---------- render: captura ovular -> almacenamiento ----------
+  // Un comentario puede explicar por qué NO hay almacenamiento que cobrar (p.ej. no
+  // quedó material para criopreservar): igual que "Justificado" en el cruce
+  // principal, cuenta como resuelto sin marcar la casilla.
+  var ALM_JUSTIFICA_PATTERNS = [
+    /\bno\s+(se\s+)?(congel|criopreserv|vitrific|almacen)\w*/i,
+    /\bsin\s+(material|ovocitos|[oó]vulos|embriones|gametos)\b/i,
+    /\bno\s+(hubo|hay|qued[oó]|quedaron|result[oó]|resultaron)\s+(material|ovocitos|[oó]vulos|embriones|gametos|sobrantes?)/i,
+    /\btransfer(encia|ido|idos)?\s+(en\s+)?fresco\b/i,
+    /\bno\s+(requiere|lleva)\s+almacenamiento\b/i
+  ];
+  function justificaSinAlmacenamiento(texto) {
+    if (!texto) return false;
+    for (var i = 0; i < ALM_JUSTIFICA_PATTERNS.length; i++) {
+      if (ALM_JUSTIFICA_PATTERNS[i].test(texto)) return true;
+    }
+    return false;
+  }
+
+  function almScoped() {
+    return byMes(byEjecutiva(bySede(CRUCE_ALM, state.sede), state.ejecutiva), state.mes);
+  }
+
+  function effectiveAlmStatus(row) {
+    var note = COMMENTS[row.id];
+    if (!note) return row.estatus;
+    if (note.cargado && row.estatus !== 'Match Encontrado') return 'Match Encontrado';
+    if (!note.cargado && (row.estatus === 'Sin Match' || row.estatus === 'Pendiente (reciente)') && justificaSinAlmacenamiento(note.text)) {
+      return 'Justificado';
+    }
+    return row.estatus;
+  }
+
+  function almCounts(records) {
+    var c = { 'Match Encontrado': 0, 'Fuera de Rango': 0, 'Justificado': 0, 'Pendiente (reciente)': 0, 'Sin Match': 0 };
+    records.forEach(function (r) {
+      var e = effectiveAlmStatus(r);
+      c[e] = (c[e] || 0) + 1;
+    });
+    return c;
+  }
+
+  // Entran a la tabla las capturas todavía sin resolver por su estatus original del
+  // motor (no el efectivo), para que al confirmar una la fila se quede visible.
+  function almDetailRows() {
+    var rows = almScoped().filter(function (r) { return r.estatus !== 'Match Encontrado'; });
+    if (state.searchAlm.trim()) {
+      var q = state.searchAlm.trim().toLowerCase();
+      rows = rows.filter(function (r) {
+        return (r.paciente || '').toLowerCase().indexOf(q) !== -1 ||
+          (r.cargoConcepto || '').toLowerCase().indexOf(q) !== -1 ||
+          (r.profesional || '').toLowerCase().indexOf(q) !== -1 ||
+          (r.ejecutiva || '').toLowerCase().indexOf(q) !== -1;
+      });
+    }
+    return rows;
+  }
+
+  function renderAlmSummary(root) {
+    var scoped = almScoped();
+    var counts = almCounts(scoped);
+    var evaluables = scoped.length - (counts['Pendiente (reciente)'] || 0);
+    var resueltas = (counts['Match Encontrado'] || 0) + (counts['Fuera de Rango'] || 0) + (counts['Justificado'] || 0);
+    var pct = evaluables ? (resueltas / evaluables) * 100 : 0;
+    var html = '<div class="kpi-grid">';
+    html += '<div class="card hero-card">';
+    html += '<div class="hero-label">% de capturas ovulares con almacenamiento</div>';
+    html += '<div class="hero-num" style="color:' + tierVar(pct) + '">' + (evaluables ? pct1(pct) : '—') + '</div>';
+    html += '<div class="hero-sub">' + fmtInt(resueltas) + ' de ' + fmtInt(evaluables) + ' capturas ya con almacenamiento de 1 o 5 años (o justificadas) — quedan <strong>' + fmtInt(counts['Sin Match'] || 0) + '</strong> sin almacenamiento por revisar' +
+      ((counts['Pendiente (reciente)'] || 0) ? ' (no incluye ' + fmtInt(counts['Pendiente (reciente)']) + (counts['Pendiente (reciente)'] === 1 ? ' captura' : ' capturas') + ' de los últimos 30 días, todavía a tiempo de cargarse)' : '') + '.</div>';
+    html += '</div>';
+    html += '<div class="stat-grid">';
+    var order = [
+      { key: 'Match Encontrado', label: 'Con almacenamiento', varName: '--good' },
+      { key: 'Sin Match', label: 'Sin almacenamiento', varName: '--bad' },
+      { key: 'Fuera de Rango', label: 'Almacenamiento tardío', varName: '--warn' },
+      { key: 'Pendiente (reciente)', label: 'Pendiente (reciente)', varName: '--neutral' },
+      { key: 'Justificado', label: 'Justificado', varName: '--neutral' }
+    ];
+    order.forEach(function (o) {
+      var n = counts[o.key] || 0;
+      var p = scoped.length ? (n / scoped.length) * 100 : 0;
+      html += '<div class="card stat">';
+      html += '<div class="lbl"><span class="dot" style="background:var(' + o.varName + ')"></span>' + escapeHtml(o.label) + '</div>';
+      html += '<div class="n" style="color:var(' + o.varName + ')">' + fmtInt(n) + '</div>';
+      html += '<div class="pct">' + pct1(p) + ' del total</div>';
+      html += '</div>';
+    });
+    html += '</div></div>';
+    root.innerHTML = html;
+  }
+
+  function renderAlm(root) {
+    var rows = almDetailRows();
+    var totalPendientes = almScoped().filter(function (r) { return r.estatus !== 'Match Encontrado'; }).length;
+    var html = '<div class="toolbar">';
+    html += '<input class="search" id="fi-alm-search" type="text" placeholder="Buscar por paciente, profesional o ejecutiva…" value="' + escapeHtml(state.searchAlm) + '">';
+    html += '<span class="count-badge">' + fmtInt(rows.length) + ' registros</span>';
+    html += '</div>';
+    if (!rows.length) {
+      var emptyMsg = totalPendientes ? 'Sin resultados para esta búsqueda.' : 'Todas las capturas ovulares de este alcance ya tienen su almacenamiento.';
+      html += '<div class="table-wrap"><div class="empty">' + emptyMsg + '</div></div>';
+      root.innerHTML = html;
+      return;
+    }
+    html += '<div class="table-wrap"><table><thead><tr>' +
+      '<th>Sede</th><th>Paciente</th><th>Fecha captura</th><th>Profesional</th><th>Ejecutiva</th>' +
+      '<th>Estatus</th><th>Almacenamiento encontrado</th><th>Dif. días</th><th>Comentario</th>' +
+      '</tr></thead><tbody>';
+    rows.forEach(function (r) {
+      var note = COMMENTS[r.id];
+      var confirmado = note && note.cargado;
+      var justificado = !confirmado && (r.estatus === 'Sin Match' || r.estatus === 'Pendiente (reciente)') && note && justificaSinAlmacenamiento(note.text);
+      var chip;
+      if (r.estatus === 'Fuera de Rango') chip = '<span class="chip fuera">Almacenamiento tardío</span>';
+      else if (r.estatus === 'Pendiente (reciente)') chip = '<span class="chip" style="background:var(--neutral-bg);color:var(--neutral)">Pendiente (&lt; 30 días)</span>';
+      else chip = '<span class="chip sin">Sin almacenamiento</span>';
+      html += '<tr' + (confirmado ? ' class="row-confirmed"' : (justificado ? ' class="row-justified"' : '')) + '>';
+      html += '<td>' + escapeHtml(r.sede) + '</td>';
+      html += '<td>' + escapeHtml(r.paciente) + '</td>';
+      html += '<td>' + fmtDate(r.fecha) + '</td>';
+      html += '<td>' + escapeHtml(r.profesional) + '</td>';
+      html += '<td>' + escapeHtml(r.ejecutiva) + '</td>';
+      html += '<td>' + chip + (confirmado ? ' <span class="chip confirm">✓ Confirmado</span>' : '') +
+        (justificado ? ' <span class="chip justified">◆ Justificado</span>' : '') + '</td>';
+      html += '<td class="cargo-cell">' + (r.cargoConcepto
+        ? '<span class="cc">' + escapeHtml(r.cargoConcepto) + '</span>' + fmtDate(r.cargoFecha)
+        : '—') + '</td>';
+      html += '<td class="diff">' + (r.diffDias === null || r.diffDias === undefined ? '—' : (r.diffDias > 0 ? '+' : '') + r.diffDias + 'd') + '</td>';
+      html += '<td>' + commentCellHtml(r) + '</td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table></div>';
+    root.innerHTML = html;
+    wireCommentInputs(root);
+  }
+
   // ---------- render: detail table ----------
   function commentCellHtml(row) {
     var note = COMMENTS[row.id] || { text: '', cargado: false };
@@ -827,6 +971,8 @@ window.__FI_COMMENTS__ = null;
     renderGrupoBars(document.getElementById('fi-bars'));
     renderStatusPills(document.getElementById('fi-status-pills'));
     renderTable(document.getElementById('fi-table'));
+    renderAlmSummary(document.getElementById('fi-alm-summary'));
+    renderAlm(document.getElementById('fi-alm'));
     renderCrucePgtSummary(document.getElementById('fi-pgt-summary'));
     renderCrucePGT(document.getElementById('fi-pgt'));
     renderDescuentos(document.getElementById('fi-descuentos'));
@@ -874,6 +1020,19 @@ window.__FI_COMMENTS__ = null;
     }
   }
 
+  function wireAlmSearch() {
+    var almSearchEl = document.getElementById('fi-alm-search');
+    if (almSearchEl) {
+      almSearchEl.addEventListener('input', function () {
+        state.searchAlm = almSearchEl.value;
+        renderAlm(document.getElementById('fi-alm'));
+        wireAlmSearch();
+        var el = document.getElementById('fi-alm-search');
+        if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+      });
+    }
+  }
+
   function wireTopEvents() {
     var sedePills = document.querySelectorAll('#fi-sede-pills .pill');
     sedePills.forEach(function (btn) {
@@ -907,6 +1066,7 @@ window.__FI_COMMENTS__ = null;
       });
     }
     wireCrucePgtSearch();
+    wireAlmSearch();
   }
 
   function renderStatusPillsOnly() {
@@ -978,6 +1138,8 @@ window.__FI_COMMENTS__ = null;
       // (la propia fila ya se actualiza sin re-render vía updateRowConfirmedVisual).
       var pgtSummaryEl = document.getElementById('fi-pgt-summary');
       if (pgtSummaryEl) renderCrucePgtSummary(pgtSummaryEl);
+      var almSummaryEl = document.getElementById('fi-alm-summary');
+      if (almSummaryEl) renderAlmSummary(almSummaryEl);
     }
 
     if (!apiReady) {
@@ -1020,6 +1182,7 @@ window.__FI_COMMENTS__ = null;
         DATA = resp.registros || [];
         DESCUENTOS = resp.descuentoRegistros || [];
         CRUCE_PGT = resp.crucePGT || [];
+        CRUCE_ALM = resp.cruceAlmacenamiento || [];
         COMMENTS = {};
         Object.keys(resp.comentarios || {}).forEach(function (id) {
           var c = resp.comentarios[id];
@@ -1064,6 +1227,9 @@ window.__FI_COMMENTS__ = null;
       '<section><div class="section-head"><h2>Casos a revisar</h2><div class="note">Comenta si detectas que falta una regla, un concepto de cargo o una excepción — sirve como conocimiento para el equipo. Si confirmas "Ya tiene cargo", ese caso se suma al % de cargo de arriba. Si el comentario explica que NO se espera cargo (p.ej. "no requiere toma de sangre porque es inseminación", "se canceló el ciclo"), el caso se marca automáticamente como <span class="chip justified" style="vertical-align:1px">◆ Justificado</span> y también cuenta como resuelto, sin marcar la casilla. Los de chip "Sin Regla" son distintos: el concepto de esa cita no tiene ninguna fila en tu hoja Reglas (ni SI ni NO) — agrégala ahí para que deje de aparecer aquí.</div></div>' +
       '<div class="pillrow" id="fi-status-pills" style="margin-bottom:14px"></div>' +
       '<div id="fi-table"></div></section>' +
+      '<section><div class="section-head"><h2>Captura ovular y almacenamiento</h2><div class="note">Toda paciente con una captura ovular en Quirófano debería tener además un cargo de <strong>almacenamiento de 1 o 5 años</strong> (se acepta desde 15 días antes hasta 90 días después de la captura; las cuotas anuales de almacenamiento y anualidades no cuentan, son renovaciones). Es una verificación aparte: no cambia el estatus de la cita en "Casos a revisar". No toda captura deja material para congelar — si ese es el caso, escríbelo en el comentario (p.ej. "no se congeló material") y se marca como <span class="chip justified" style="vertical-align:1px">◆ Justificado</span>; si ya lo cargaste, marca la casilla.</div></div>' +
+      '<div id="fi-alm-summary" style="margin-bottom:18px"></div>' +
+      '<div id="fi-alm"></div></section>' +
       '<section><div class="section-head"><h2>Cruce de PGTs - Proveedor y cargos</h2><div class="note">Por cada factura que un proveedor de PGT ya envió ("Base proveedores PGT"), verifica que el paciente tenga un cargo correspondiente en CARGOS (concepto de "Regla proveedores PGT" columna G) dentro del mes de recepción de la muestra y/o de entrega del reporte. La tabla de abajo solo muestra las que todavía no tienen cargo — marca "Ya tiene cargo" si lo confirmas a mano (cuenta como match) o deja un comentario.</div></div>' +
       '<div id="fi-pgt-summary" style="margin-bottom:18px"></div>' +
       '<div id="fi-pgt"></div></section>' +
