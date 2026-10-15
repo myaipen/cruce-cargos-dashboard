@@ -162,7 +162,9 @@ window.__FI_COMMENTS__ = null;
   // de Lucía). Si alguna de estas vuelve a tener citas asignadas, reaparece sola
   // en el filtro vía getEjecutivas() aunque no esté aquí -- esta lista es solo
   // el orden preferido, no una lista cerrada.
-  var EJECUTIVA_ORDER = ['Ana', 'Sharon', 'Eva', 'Lucía', 'Jacqueline', 'Jimena', 'Wendy', 'Alondra', 'Viviana', 'Externos'];
+  // 2026-10-15: "Subrogación" es un equipo aparte -- agrupa a todos los pacientes que
+  // vienen de las hojas de Subrogación (ver Code.gs), sin importar el médico de la cita.
+  var EJECUTIVA_ORDER = ['Ana', 'Sharon', 'Eva', 'Lucía', 'Jacqueline', 'Jimena', 'Wendy', 'Alondra', 'Viviana', 'Externos', 'Subrogación'];
 
   function getEjecutivas() {
     var present = {};
