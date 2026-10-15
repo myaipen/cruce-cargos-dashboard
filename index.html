@@ -778,9 +778,16 @@ window.__FI_COMMENTS__ = null;
     var html = '<div class="kpi-grid">';
     html += '<div class="card hero-card">';
     html += '<div class="hero-label">% de capturas ovulares con almacenamiento</div>';
-    html += '<div class="hero-num" style="color:' + tierVar(pct) + '">' + (evaluables ? pct1(pct) : '—') + '</div>';
+    var pend = counts['Pendiente (reciente)'] || 0;
+    var pocaBase = pend > 0 && pend > evaluables;
+    html += '<div class="hero-num" style="color:' + (pocaBase ? 'var(--neutral)' : tierVar(pct)) + '">' + (evaluables ? pct1(pct) : '—') + '</div>';
+    if (pocaBase) html += '<div class="hero-sub" style="margin-top:-4px;font-weight:600">' + fmtInt(resueltas) + ' de ' + fmtInt(evaluables) + (evaluables === 1 ? ' evaluable' : ' evaluables') + '</div>';
     html += '<div class="hero-sub">' + fmtInt(resueltas) + ' de ' + fmtInt(evaluables) + ' capturas ya con almacenamiento de 1 o 5 años (o justificadas) — quedan <strong>' + fmtInt(counts['Sin Match'] || 0) + '</strong> sin almacenamiento por revisar' +
       ((counts['Pendiente (reciente)'] || 0) ? ' (no incluye ' + fmtInt(counts['Pendiente (reciente)']) + (counts['Pendiente (reciente)'] === 1 ? ' captura' : ' capturas') + ' de los últimos 30 días, todavía a tiempo de cargarse)' : '') + '.</div>';
+    if (pocaBase) {
+      html += '<div class="hero-sub" style="margin-top:10px;padding:8px 10px;border-radius:8px;background:var(--warn-bg);color:var(--warn);font-weight:600">' +
+        fmtInt(pend) + (pend === 1 ? ' captura pendiente' : ' capturas pendientes') + ' (últimos 30 días): todavía no hay base suficiente para medir este alcance. El porcentaje se calcula solo con ' + fmtInt(evaluables) + (evaluables === 1 ? ' captura evaluable.' : ' capturas evaluables.') + '</div>';
+    }
     html += '</div>';
     html += '<div class="stat-grid">';
     var order = [
